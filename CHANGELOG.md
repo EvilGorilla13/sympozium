@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.43](https://github.com/sympozium-ai/sympozium/compare/v0.10.42...v0.10.43) (2026-07-14)
+
+
+### Features
+
+* **controller:** opt-in controller-side delegation executor with guardrails + telemetry ([0179b44](https://github.com/sympozium-ai/sympozium/commit/0179b4420465c44809f39fc1bb3e52c9c6334162))
+* implement allow/deny tool policy semantics ([dfb12dd](https://github.com/sympozium-ai/sympozium/commit/dfb12dde8175aede5c1a45b556dcaed649444854))
+* ToolPolicy allow/deny propagation and runner-side filtering ([ebcdafe](https://github.com/sympozium-ai/sympozium/commit/ebcdafef29e18c60f60e6feade0e641eecaffbe4))
+* wire ToolPolicy.Deny to agent-runner tool filtering (VEL-1084) ([6bd88e4](https://github.com/sympozium-ai/sympozium/commit/6bd88e4ca082e725fcd9afe78f8da4241767850e))
+
+
+### Bug Fixes
+
+* propagate Ensemble toolPolicy to AgentRun pods ([67b9161](https://github.com/sympozium-ai/sympozium/commit/67b9161e032c409534ade952a6ae05119afacd9a))
+
 ## [0.10.42](https://github.com/sympozium-ai/sympozium/compare/v0.10.41...v0.10.42) (2026-07-09)
 
 
