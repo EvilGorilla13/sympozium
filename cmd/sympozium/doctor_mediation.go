@@ -118,12 +118,14 @@ func (d *doctor) checkMediation(ctx context.Context, rel *releaseInfo) doctorFin
 	// the resolver matches, whatever the release declares.
 	var published []sympoziumv1alpha1.CellnExecutionPolicyRoute
 	policyName := ""
+	open := false
 	if facts, err := cellninstall.ReadFleetFacts(ctx, d.client); err == nil {
 		_, policyName, _ = cellninstall.PlatformCatalogueNames(facts.Scope)
 		var policy sympoziumv1alpha1.CellnExecutionPolicy
 		if err := d.client.Get(ctx, types.NamespacedName{Name: policyName}, &policy); err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
 			return failed(check, err)
 		}
+		open = policy.Name != "" && policy.Spec.OpenModelAccess()
 		for _, route := range policy.Spec.Routes {
 			if route.Auth == "secret" || route.Auth == "none" {
 				published = append(published, route)
@@ -133,16 +135,20 @@ func (d *doctor) checkMediation(ctx context.Context, rel *releaseInfo) doctorFin
 	var pending []string
 	for _, declared := range record.Routes {
 		route, err := declared.PolicyRoute()
+		// Open model access already admits a public HTTPS route without its entry.
+		if err == nil && open && route.Auth != "host-profile" && !route.AllowInsecure && allHTTPS(route.EndpointOrigins) {
+			continue
+		}
 		if err == nil && !slices.ContainsFunc(published, func(have sympoziumv1alpha1.CellnExecutionPolicyRoute) bool { return reflect.DeepEqual(have, route) }) {
 			pending = append(pending, fmt.Sprintf("%s/%s", route.Provider, modelsLabel(route.Models)))
 		}
 	}
 	switch {
-	case len(published) == 0 && len(pending) == 0 && !record.MediateBackends:
+	case !open && len(published) == 0 && len(pending) == 0 && !record.MediateBackends:
 		raise(statusWarn)
 		f.Warning = "no auth \"secret\" route is declared or published (celln.mediation.defaultRoutes=false and no routes): Agents with their own key will be refused AUTH_ROUTE_MISMATCH; declare a route with --celln-mediated-route"
 		f.Remedy = append(f.Remedy, mediatedRouteRemedy)
-	case len(pending) != 0 || (len(published) == 0 && record.MediateBackends):
+	case len(pending) != 0 || (!open && len(published) == 0 && record.MediateBackends):
 		raise(statusWarn)
 		what := "celln.mediation.mediateBackends"
 		if len(pending) != 0 {
@@ -158,10 +164,23 @@ func (d *doctor) checkMediation(ctx context.Context, rel *releaseInfo) doctorFin
 	switch {
 	case f.Status == statusFail:
 		f.Summary = fmt.Sprintf("enabled, but %d of its parts are missing or not ready", len(f.Details))
+	case open && len(routes) == 0:
+		f.Summary = fmt.Sprintf("enabled; trust objects present, the model gateway is ready and policy %s has open model access: an Agent may bring its own key for any public HTTPS provider", policyName)
+	case open:
+		f.Summary = fmt.Sprintf("enabled; trust objects present, the model gateway is ready and policy %s has open model access (any public HTTPS provider with an Agent's own key) plus: %s", policyName, strings.Join(routes, "; "))
 	case len(routes) == 0:
 		f.Summary = "enabled; trust objects present and the model gateway is ready, but no Agent may bring its own key yet"
 	default:
 		f.Summary = fmt.Sprintf("enabled; trust objects present, the model gateway is ready and policy %s permits: %s", policyName, strings.Join(routes, "; "))
 	}
 	return f
+}
+
+func allHTTPS(origins []string) bool {
+	for _, origin := range origins {
+		if !strings.HasPrefix(strings.ToLower(origin), "https://") {
+			return false
+		}
+	}
+	return true
 }

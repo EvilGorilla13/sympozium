@@ -2,7 +2,8 @@ import { useState, type ComponentType } from "react";
 import { Bot, Check, Copy, Loader2, RefreshCw } from "lucide-react";
 import { getNamespace, type CellnMediatedRoute, type CellnMediation } from "@/lib/api";
 import { useCellnKeySecrets } from "@/hooks/use-api";
-import { GUIDE_URL, offersThinkingSwitch, routeId, routeModelsLabel, validModelName, type KeyChoice, type OwnKeyStep } from "@/lib/celln-own-key";
+import { GUIDE_URL, offersThinkingSwitch, openAdmits, openRoute, routeId, routeModelsLabel, validModelName, type KeyChoice, type OwnKeyStep } from "@/lib/celln-own-key";
+import { providerReachableOnPlane } from "@/lib/creation";
 import { CellnModelParametersField } from "@/components/celln-model-parameters";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,14 +26,14 @@ function NoRoutes({ mediation }: { mediation: CellnMediation }) {
   return (
     <div role="status" className="space-y-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground" data-testid={mediation.enabled ? "celln-no-routes" : "celln-mediation-disabled"}>
       <p className="text-sm font-medium text-foreground">
-        {!mediation.enabled ? "Mediated model access is not enabled on this cluster" : pending ? "The declared providers are not published yet" : "No provider is declared for this namespace"}
+        {!mediation.enabled ? "Mediated model access is not enabled on this cluster" : pending ? "The declared providers are not published yet" : "This namespace allows only declared providers, and none is declared"}
       </p>
       {!mediation.enabled ? (
         <p>A Celln Agent brings its own provider key, which the model gateway adds to its requests. That needs mediated model access, which <code>sympozium install</code> turns on by default but is off on this cluster (<code>celln.mediation.enabled=false</code>: installed with <code>--no-celln-mediation</code>, or by a source build without a gateway image). An operator reruns the install without the opt-out (a source build adds <code>--model-gateway-image</code>); routes for further providers are optional:</p>
       ) : pending ? (
         <p>The operator declared {mediation.pending.map((route) => route.provider).join(", ")}, but no execution policy carries {mediation.pending.length === 1 ? "it" : "them"} yet, so a run would be refused <code>AUTH_ROUTE_MISMATCH</code>. An operator publishes {mediation.pending.length === 1 ? "it" : "them"} with:</p>
       ) : (
-        <p>Mediation is enabled, but no provider route reaches <code>{getNamespace()}</code>: the built-in routes (any model of OpenAI, Anthropic and DeepSeek) are switched off with <code>celln.mediation.defaultRoutes=false</code>, or this namespace's policy carries none. An operator declares each provider and endpoint origin an Agent may bring a key for (<code>models=*</code> allows any model). Until then every run would be refused <code>AUTH_ROUTE_MISMATCH</code>.</p>
+        <p>A policy selecting <code>{getNamespace()}</code> sets <code>modelAccess: declared</code>, so an Agent here may use only declared routes, and none reaches it: the built-in routes (any model of OpenAI, Anthropic and DeepSeek) are switched off with <code>celln.mediation.defaultRoutes=false</code>, or the policy carries none. An operator declares each provider and endpoint origin an Agent may bring a key for (<code>models=*</code> allows any model). Until then every run would be refused <code>AUTH_ROUTE_MISMATCH</code>.</p>
       )}
       <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded bg-muted/50 p-2 font-mono text-[11px] text-foreground" data-testid="celln-route-command">
         {mediation.enabled && pending
@@ -46,10 +47,57 @@ function NoRoutes({ mediation }: { mediation: CellnMediation }) {
   );
 }
 
+interface RouteOption {
+  key: string;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+  route?: CellnMediatedRoute;
+  /** Shown beside the label: the declared endpoint, or why it cannot be chosen. */
+  note?: string;
+}
+
 /**
- * The Provider step of a Celln Agent: only the providers the operator declared
- * for this namespace. There is no other way to run one, so without a route the
- * step says what the operator must do instead of offering something else.
+ * Every provider the one-shot wizard lists, in the same order. Under open
+ * model access a hosted provider is chosen directly; a provider whose endpoint
+ * is plain HTTP or private is offered through the routes the operator
+ * declared for it, and is listed but disabled without one.
+ */
+function routeOptions(mediation: CellnMediation, providers: ProviderChoice[]): RouteOption[] {
+  const declared = (route: CellnMediatedRoute, meta?: ProviderChoice): RouteOption => ({
+    key: routeId(route),
+    label: meta?.label || route.provider,
+    icon: meta?.icon || Bot,
+    route,
+    note: `declared · ${route.endpointOrigins.join(", ")}${route.auth === "none" ? " · no key" : ""}`,
+  });
+  const used = new Set<CellnMediatedRoute>();
+  const options: RouteOption[] = [];
+  for (const provider of providers) {
+    const routes = mediation.routes.filter((route) => route.provider === provider.value);
+    const open = mediation.open && providerReachableOnPlane(provider.value, { plane: "celln" });
+    if (open) options.push({ key: routeId(openRoute(provider.value)), label: provider.label, icon: provider.icon, route: openRoute(provider.value) });
+    for (const route of routes) {
+      used.add(route);
+      // A public route is already inside the open choice.
+      if (open && openAdmits(route)) continue;
+      options.push(declared(route, provider));
+    }
+    if (!open && routes.length === 0) {
+      const note = provider.value === "bedrock" ? "no OpenAI-chat or Anthropic Messages endpoint" : mediation.open ? "plain-HTTP endpoint: needs a declared route" : "needs a declared route";
+      options.push({ key: `unavailable|${provider.value}`, label: provider.label, icon: provider.icon, note });
+    }
+  }
+  for (const route of mediation.routes) {
+    if (!used.has(route)) options.push(declared(route));
+  }
+  return options;
+}
+
+/**
+ * The Provider step of a Celln Agent: the same providers as the one-shot
+ * wizard. Under open model access a hosted provider takes the Agent's own key
+ * for any model; plain-HTTP and private endpoints come from routes the
+ * operator declared. Without mediation the step says what the operator must do.
  */
 export function CellnRouteStep({ mediation, isLoading, error, providers, selected, onSelect }: {
   mediation?: CellnMediation;
@@ -59,27 +107,25 @@ export function CellnRouteStep({ mediation, isLoading, error, providers, selecte
   selected?: CellnMediatedRoute;
   onSelect: (route: CellnMediatedRoute) => void;
 }) {
-  if (isLoading) return <p className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Reading the providers declared for this namespace…</p>;
+  if (isLoading) return <p className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Reading the providers this namespace may use…</p>;
   if (error || !mediation) return <p role="alert" className="break-words text-xs text-red-400" data-testid="celln-mediation-error">Could not read the declared providers: {error || "no answer"}</p>;
-  if (!mediation.enabled || mediation.routes.length === 0) return <NoRoutes mediation={mediation} />;
-  const meta = (route: CellnMediatedRoute) => providers.find((provider) => provider.value === route.provider);
-  // Two routes may share a provider name (another protocol or origin); say which.
-  const ambiguous = (route: CellnMediatedRoute) => mediation.routes.filter((candidate) => candidate.provider === route.provider).length > 1;
+  if (!mediation.enabled || (!mediation.open && mediation.routes.length === 0)) return <NoRoutes mediation={mediation} />;
+  const options = routeOptions(mediation, providers);
   return (
     <div className="space-y-4" data-testid="celln-route-step">
       <div className="space-y-2">
         <Label>AI Provider</Label>
-        <Select value={selected ? routeId(selected) : ""} onValueChange={(value) => { const route = mediation.routes.find((candidate) => routeId(candidate) === value); if (route) onSelect(route); }}>
+        <Select value={selected ? routeId(selected) : ""} onValueChange={(value) => { const option = options.find((candidate) => candidate.key === value); if (option?.route) onSelect(option.route); }}>
           <SelectTrigger data-testid="celln-route-select"><SelectValue placeholder="Select a provider…" /></SelectTrigger>
           <SelectContent>
-            {mediation.routes.map((route) => {
-              const Icon = meta(route)?.icon || Bot;
+            {options.map((option) => {
+              const Icon = option.icon;
               return (
-                <SelectItem key={routeId(route)} value={routeId(route)}>
+                <SelectItem key={option.key} value={option.key} disabled={!option.route}>
                   <span className="flex items-center gap-2">
                     <Icon className="h-4 w-4 shrink-0" />
-                    {meta(route)?.label || route.provider}
-                    {ambiguous(route) && <span className="text-xs text-muted-foreground">{route.protocol} · {route.endpointOrigins.join(", ")}</span>}
+                    {option.label}
+                    {option.note && <span className="text-xs text-muted-foreground">{option.note}</span>}
                   </span>
                 </SelectItem>
               );
@@ -89,10 +135,17 @@ export function CellnRouteStep({ mediation, isLoading, error, providers, selecte
       </div>
       {selected && (
         <p className="break-words text-xs text-muted-foreground" data-testid="celln-route-summary">
-          Declared by the operator in policy <code>{selected.policy}</code>: {selected.protocol} on {selected.endpointOrigins.join(", ")}, {selected.anyModel ? "any model" : <>models {routeModelsLabel(selected)}</>}. {selected.auth === "none" ? "No key is required. This Agent gets its own model connection." : "This Agent gets its own key and its own model connection; nothing is shared with another Agent."}
+          {selected.open
+            ? <>Any model on {selected.endpointOrigins[0] || "your provider's HTTPS endpoint"}, through the model gateway with this Agent's own key. </>
+            : <>Declared by the operator in policy <code>{selected.policy}</code>: {selected.protocol} on {selected.endpointOrigins.join(", ")}, {selected.anyModel ? "any model" : <>models {routeModelsLabel(selected)}</>}. </>}
+          {selected.auth === "none" ? "No key is required. This Agent gets its own model connection." : "This Agent gets its own key and its own model connection; nothing is shared with another Agent."}
         </p>
       )}
-      <p className="text-xs text-muted-foreground">Only providers an operator declared for this namespace are listed. Another provider or endpoint (or a model outside an exact list) needs a declared route first (<a className="underline" href={GUIDE_URL} target="_blank" rel="noreferrer">guide</a>).</p>
+      <p className="text-xs text-muted-foreground">
+        {mediation.open
+          ? "Hosted providers take any model on a public HTTPS endpoint. A plain-HTTP or private endpoint (a local server) needs a route the operator declares"
+          : "This namespace's policy allows only the routes an operator declared. Another provider or endpoint (or a model outside an exact list) needs a declared route first"}{" "}(<a className="underline" href={GUIDE_URL} target="_blank" rel="noreferrer">guide</a>).
+      </p>
     </div>
   );
 }
@@ -189,7 +242,7 @@ export function CellnKeyStep({ route, value, onChange, managedSecretName }: {
  * The Model step: the models and endpoint origins of the chosen route, and
  * this Agent's own model parameters and output-token limit. An exact list is
  * a choice (admission matches it exactly); an any-model route takes the model
- * name as text. The origin is never free text.
+ * name as text. The origin is free text only under open model access.
  */
 export function CellnModelStep({ route, model, onModel, origin, onOrigin, path, onPath, parameters, onParameters, maxOutputTokens, onMaxOutputTokens }: {
   route: CellnMediatedRoute;
@@ -213,7 +266,7 @@ export function CellnModelStep({ route, model, onModel, origin, onOrigin, path, 
           {model !== "" && !validModelName(model) ? (
             <p role="alert" className="text-xs text-red-400" data-testid="celln-model-name-error">A model name is 1–128 bytes with no spaces or control characters, and not “*” itself.</p>
           ) : (
-            <p className="text-xs text-muted-foreground">The operator allows any {route.provider} model on this route; type the provider's model name. The request still goes only to the origin below.</p>
+            <p className="text-xs text-muted-foreground">{route.open ? <>Any model {route.provider} serves; type the provider's model name.</> : <>The operator allows any {route.provider} model on this route; type the provider's model name. The request still goes only to the origin below.</>}</p>
           )}
         </div>
       ) : (
@@ -240,7 +293,9 @@ export function CellnModelStep({ route, model, onModel, origin, onOrigin, path, 
       <div className="space-y-2">
         <Label>Endpoint</Label>
         <div className="flex flex-wrap items-center gap-2">
-          {route.endpointOrigins.length > 1 ? (
+          {route.open ? (
+            <Input aria-label="Endpoint origin" data-testid="celln-origin-input" className="h-8 w-72 font-mono text-xs" spellCheck={false} value={origin} onChange={(e) => onOrigin(e.target.value.trim())} placeholder="https://api.example.com" />
+          ) : route.endpointOrigins.length > 1 ? (
             <Select value={origin} onValueChange={onOrigin}>
               <SelectTrigger className="w-auto min-w-[14rem] font-mono text-xs" data-testid="celln-origin-select"><SelectValue placeholder="Choose an origin" /></SelectTrigger>
               <SelectContent>{route.endpointOrigins.map((candidate) => <SelectItem key={candidate} value={candidate}>{candidate}</SelectItem>)}</SelectContent>
@@ -250,7 +305,11 @@ export function CellnModelStep({ route, model, onModel, origin, onOrigin, path, 
           )}
           <Input aria-label="Request path" data-testid="celln-endpoint-path" className="h-8 w-56 font-mono text-xs" spellCheck={false} value={path} onChange={(e) => onPath(e.target.value)} />
         </div>
-        <p className="text-xs text-muted-foreground">The origin is the operator's; only the request path is yours, and it defaults to the {route.protocol} standard.</p>
+        <p className="text-xs text-muted-foreground">
+          {route.open
+            ? <>A public HTTPS origin (scheme and host only); the model gateway never dials a private or loopback address for it. The path defaults to the {route.protocol} standard.</>
+            : <>The origin is the operator's; only the request path is yours, and it defaults to the {route.protocol} standard.</>}
+        </p>
       </div>
       <CellnModelParametersField value={parameters} onChange={onParameters} showThinking={offersThinkingSwitch(route)} maxOutputTokens={maxOutputTokens} onMaxOutputTokensChange={onMaxOutputTokens} />
     </div>

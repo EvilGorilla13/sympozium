@@ -213,11 +213,21 @@ export interface CellnMediatedRoute {
   policy?: string;
   /** The fixed key name the provider Secret must hold for this protocol. */
   secretKey: string;
+  /**
+   * Client-side only: a provider chosen under open model access. Its models
+   * and endpoint origin are the user's, not a declared list.
+   */
+  open?: boolean;
 }
 
 export interface CellnMediation {
   enabled: boolean;
   mediateBackends: boolean;
+  /**
+   * Every policy selecting the namespace has open model access: any public
+   * HTTPS provider endpoint and model with the Agent's own key, besides routes.
+   */
+  open: boolean;
   /** Routes the namespace's policies carry now: what a run is matched against. */
   routes: CellnMediatedRoute[];
   /** Declared routes no policy carries yet (sympozium celln-mediation apply-routes). */

@@ -195,6 +195,76 @@ func TestPlatformResolverKeylessLANRequiresPolicyApproval(t *testing.T) {
 	}
 }
 
+// Open model access admits an Agent's own public HTTPS route that no policy
+// declares; "declared" on any one selecting policy takes that back, and plain
+// HTTP or a private origin never rides on open access.
+func TestPlatformResolverOpenModelAccess(t *testing.T) {
+	f := newPlatformFixture(t, "open-access", true)
+	ctx := context.Background()
+	var connection api.ModelConnection
+	if err := f.client.Get(ctx, types.NamespacedName{Namespace: f.runKey.Namespace, Name: "model"}, &connection); err != nil {
+		t.Fatal(err)
+	}
+	connection.Spec.Provider = "anthropic"
+	connection.Spec.Protocol = "anthropic-messages"
+	connection.Spec.Endpoint = "https://api.anthropic.com/v1/messages"
+	connection.Spec.Models = []string{"claude-undeclared"}
+	if err := f.client.Update(ctx, &connection); err != nil {
+		t.Fatal(err)
+	}
+	var run api.AgentRun
+	if err := f.client.Get(ctx, f.runKey, &run); err != nil {
+		t.Fatal(err)
+	}
+	run.Spec.Model.Model = "claude-undeclared"
+	if err := f.client.Update(ctx, &run); err != nil {
+		t.Fatal(err)
+	}
+	var agent api.Agent
+	if err := f.client.Get(ctx, types.NamespacedName{Namespace: f.runKey.Namespace, Name: "agent"}, &agent); err != nil {
+		t.Fatal(err)
+	}
+	agent.Spec.AuthRefs = []api.SecretRef{{Provider: "anthropic", Secret: "model-secret"}}
+	if err := f.client.Update(ctx, &agent); err != nil {
+		t.Fatal(err)
+	}
+	request := PlatformResolveRequest{ClusterID: "cluster", Now: f.now, AdmissionWindow: time.Minute, Operation: "execution.start"}
+	resolved, err := f.resolver.Resolve(ctx, f.runKey, request)
+	if err != nil {
+		t.Fatalf("open access refused an undeclared public route: %v", err)
+	}
+	if got := resolved.Decision.Route; got.Provider != "anthropic" || got.Model != "claude-undeclared" || got.EndpointOrigin != "https://api.anthropic.com" || got.Auth != "secret" || got.CredentialSourceRef == nil || got.CredentialSourceRef.SecretKey != "ANTHROPIC_API_KEY" {
+		t.Fatalf("unexpected open route: %+v", got)
+	}
+
+	// A private origin needs the operator's route even with open access.
+	connection.Spec.Endpoint = "https://10.0.0.5/v1/messages"
+	connection.Spec.AllowInsecure = true
+	if err := f.client.Update(ctx, &connection); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.resolver.Resolve(ctx, f.runKey, request); PlatformReason(err) != ReasonRouteMismatch {
+		t.Fatalf("private origin admitted by open access: %v", err)
+	}
+	connection.Spec.Endpoint = "https://api.anthropic.com/v1/messages"
+	connection.Spec.AllowInsecure = false
+	if err := f.client.Update(ctx, &connection); err != nil {
+		t.Fatal(err)
+	}
+
+	var policy api.CellnExecutionPolicy
+	if err := f.client.Get(ctx, types.NamespacedName{Name: "z-policy"}, &policy); err != nil {
+		t.Fatal(err)
+	}
+	policy.Spec.ModelAccess = api.CellnModelAccessDeclared
+	if err := f.client.Update(ctx, &policy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.resolver.Resolve(ctx, f.runKey, request); PlatformReason(err) != ReasonRouteMismatch {
+		t.Fatalf("declared access admitted an undeclared route: %v", err)
+	}
+}
+
 func platformRequest(f platformFixture) PlatformResolveRequest {
 	return PlatformResolveRequest{ClusterID: "cluster-test", Now: f.now, AdmissionWindow: 60 * time.Second}
 }

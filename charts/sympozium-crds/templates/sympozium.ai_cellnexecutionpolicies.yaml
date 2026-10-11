@@ -87,6 +87,18 @@ spec:
                 minItems: 1
                 type: array
                 x-kubernetes-list-type: set
+              modelAccess:
+                description: |-
+                  ModelAccess says which model routes an Agent's own ModelConnection may
+                  use. "open" (the default): any public HTTPS endpoint, with the Agent's
+                  own key or none, for any model; the model gateway still refuses private
+                  and loopback addresses. "declared": only an exact entry of routes.
+                  Host-profile, plain-HTTP and private origins need an exact route under
+                  either mode.
+                enum:
+                - open
+                - declared
+                type: string
               namespaceSelector:
                 description: |-
                   A label selector is a label query over a set of resources. The result of matchLabels and
@@ -139,11 +151,13 @@ spec:
               routes:
                 items:
                   description: |-
-                    CellnExecutionPolicyRoute is explicit model endpoint authority. A tenant
-                    ModelConnection may choose only a route contained by one of these entries.
+                    CellnExecutionPolicyRoute is explicit model endpoint authority. Under the
+                    policy's modelAccess "declared", a tenant ModelConnection may choose only a
+                    route contained by one of these entries; under "open" (the default) an
+                    entry is needed only for host-profile, plain-HTTP and private origins.
                     Models are exact names, or exactly ["*"] (CellnAnyModel) for any model name
                     of the route's provider at its exact endpoint origins; origins are never a
-                    pattern, so a key only ever goes to the origins listed here.
+                    pattern.
                   properties:
                     allowInsecure:
                       description: |-

@@ -37,6 +37,11 @@ func TestDoctorMediation(t *testing.T) {
 		return &sympoziumv1alpha1.CellnExecutionPolicy{ObjectMeta: metav1.ObjectMeta{Name: "celln-fleet-starter"}, Spec: sympoziumv1alpha1.CellnExecutionPolicySpec{Routes: append([]sympoziumv1alpha1.CellnExecutionPolicyRoute{
 			{Provider: "deepseek", Protocol: "openai-chat", Models: []string{"deepseek-chat"}, EndpointOrigins: []string{"https://api.deepseek.com"}, Auth: "host-profile"}}, routes...)}}
 	}
+	declaredPolicy := func(routes ...sympoziumv1alpha1.CellnExecutionPolicyRoute) client.Object {
+		p := policy(routes...).(*sympoziumv1alpha1.CellnExecutionPolicy)
+		p.Spec.ModelAccess = sympoziumv1alpha1.CellnModelAccessDeclared
+		return p
+	}
 	anthropic := sympoziumv1alpha1.CellnExecutionPolicyRoute{Provider: "anthropic", Protocol: "anthropic-messages", Models: []string{"claude-a"}, EndpointOrigins: []string{"https://api.anthropic.com"}, Auth: "secret"}
 	const declared = `{"mediateBackends":false,"routes":[{"provider":"anthropic","protocol":"anthropic-messages","models":["claude-a"],"endpointOrigins":["https://api.anthropic.com"]}]}`
 	const nothing = `{"mediateBackends":false,"routes":[]}`
@@ -59,11 +64,17 @@ func TestDoctorMediation(t *testing.T) {
 		{name: "disabled", objects: []client.Object{configureDaemonSet()}, status: statusPass, want: []string{"disabled", "ScopedDispatchDisabled"}},
 		{name: "enabled and coherent", objects: with([]client.Object{configureDaemonSet(), record(declared), gateway(1), policy(anthropic)}, defaults), status: statusPass,
 			want: []string{"enabled", "celln-fleet-starter", "anthropic/claude-a (anthropic-messages, auth=secret) at https://api.anthropic.com"}, absent: []string{"AUTH_ROUTE_MISMATCH"}},
-		{name: "enabled without any route", objects: with([]client.Object{configureDaemonSet(), record(nothing), gateway(1), policy()}, defaults), status: statusWarn,
+		{name: "open access needs no route", objects: with([]client.Object{configureDaemonSet(), record(nothing), gateway(1), policy()}, defaults), status: statusPass,
+			want: []string{"open model access", "any public HTTPS provider"}, absent: []string{"AUTH_ROUTE_MISMATCH"}},
+		{name: "open access admits an unpublished public route", objects: with([]client.Object{configureDaemonSet(), record(declared), gateway(1), policy()}, defaults), status: statusPass,
+			want: []string{"open model access"}, absent: []string{"declared but not in policy"}},
+		{name: "open access still needs a plain-HTTP route published", objects: with([]client.Object{configureDaemonSet(), record(`{"routes":[{"provider":"llama-server","protocol":"openai-chat","models":["local"],"endpointOrigins":["http://framework:8080"],"auth":"none","allowInsecure":true}]}`), gateway(1), policy()}, defaults), status: statusWarn,
+			want: []string{"declared but not in policy celln-fleet-starter yet: llama-server/local"}},
+		{name: "declared access without any route", objects: with([]client.Object{configureDaemonSet(), record(nothing), gateway(1), declaredPolicy()}, defaults), status: statusWarn,
 			want: []string{"Agents with their own key will be refused AUTH_ROUTE_MISMATCH; declare a route with --celln-mediated-route", "sympozium install --celln-fleet"}},
-		{name: "declared but not published", objects: with([]client.Object{configureDaemonSet(), record(declared), gateway(1), policy()}, defaults), status: statusWarn,
+		{name: "declared but not published", objects: with([]client.Object{configureDaemonSet(), record(declared), gateway(1), declaredPolicy()}, defaults), status: statusWarn,
 			want: []string{"declared but not in policy celln-fleet-starter yet: anthropic/claude-a", "sympozium celln-mediation apply-routes"}},
-		{name: "backends declared but not published", objects: with([]client.Object{configureDaemonSet(), record(`{"mediateBackends":true,"routes":[]}`), gateway(1), policy()}, defaults), status: statusWarn,
+		{name: "backends declared but not published", objects: with([]client.Object{configureDaemonSet(), record(`{"mediateBackends":true,"routes":[]}`), gateway(1), declaredPolicy()}, defaults), status: statusWarn,
 			want: []string{"celln.mediation.mediateBackends", "apply-routes"}},
 		{name: "a published route outlives its declaration", objects: with([]client.Object{configureDaemonSet(), record(nothing), gateway(1), policy(anthropic)}, defaults), status: statusPass, want: []string{"anthropic/claude-a"}},
 		{name: "no bootstrap", objects: []client.Object{configureDaemonSet(), record(declared), gateway(1), policy(anthropic)}, status: statusFail,
