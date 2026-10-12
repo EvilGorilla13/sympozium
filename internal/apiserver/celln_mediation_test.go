@@ -57,15 +57,19 @@ func TestCellnMediationReportsWhatAnAgentMayBringAKeyFor(t *testing.T) {
 		namespace string
 		record    *corev1.ConfigMap
 		routes    []sympoziumv1alpha1.CellnExecutionPolicyRoute
-		status    int
-		want      CellnMediation
+		// modelAccess is the policy's spec.modelAccess.
+		modelAccess string
+		status      int
+		want        CellnMediation
 	}{
 		{name: "keyless route has no Secret key", namespace: "team-a", record: record(`{"routes":[]}`), routes: []sympoziumv1alpha1.CellnExecutionPolicyRoute{keyless}, status: http.StatusOK,
-			want: CellnMediation{Enabled: true, Routes: []CellnMediatedRoute{keylessAPI}, Pending: []CellnMediatedRoute{}}},
+			want: CellnMediation{Enabled: true, Open: true, Routes: []CellnMediatedRoute{keylessAPI}, Pending: []CellnMediatedRoute{}}},
 		{name: "mediation off", namespace: "team-a", status: http.StatusOK, want: CellnMediation{Routes: []CellnMediatedRoute{}, Pending: []CellnMediatedRoute{}}},
-		{name: "enabled, nothing declared", namespace: "team-a", record: record(`{"mediateBackends":false,"routes":[]}`), status: http.StatusOK, want: CellnMediation{Enabled: true, Routes: []CellnMediatedRoute{}, Pending: []CellnMediatedRoute{}}},
+		{name: "enabled, nothing declared", namespace: "team-a", record: record(`{"mediateBackends":false,"routes":[]}`), status: http.StatusOK, want: CellnMediation{Enabled: true, Open: true, Routes: []CellnMediatedRoute{}, Pending: []CellnMediatedRoute{}}},
+		{name: "declared model access is not open", namespace: "team-a", record: record(`{"routes":[]}`), modelAccess: sympoziumv1alpha1.CellnModelAccessDeclared, routes: []sympoziumv1alpha1.CellnExecutionPolicyRoute{anthropic}, status: http.StatusOK,
+			want: CellnMediation{Enabled: true, Routes: []CellnMediatedRoute{published}, Pending: []CellnMediatedRoute{}}},
 		{name: "declared and partly published", namespace: "team-a", record: record(declared), routes: []sympoziumv1alpha1.CellnExecutionPolicyRoute{anthropic}, status: http.StatusOK,
-			want: CellnMediation{Enabled: true, MediateBackends: true, Routes: []CellnMediatedRoute{published}, Pending: []CellnMediatedRoute{pending}}},
+			want: CellnMediation{Enabled: true, MediateBackends: true, Open: true, Routes: []CellnMediatedRoute{published}, Pending: []CellnMediatedRoute{pending}}},
 		{name: "a policy route outlives a disabled release", namespace: "team-a", routes: []sympoziumv1alpha1.CellnExecutionPolicyRoute{anthropic}, status: http.StatusOK,
 			want: CellnMediation{Routes: []CellnMediatedRoute{published}, Pending: []CellnMediatedRoute{}}},
 		{name: "a namespace no policy admits is offered nothing", namespace: "sympozium-system", record: record(declared), routes: []sympoziumv1alpha1.CellnExecutionPolicyRoute{anthropic}, status: http.StatusOK,
@@ -75,11 +79,12 @@ func TestCellnMediationReportsWhatAnAgentMayBringAKeyFor(t *testing.T) {
 		// An any-model route says so, published or pending, so a client asks
 		// for a model name instead of offering a list.
 		{name: "any-model route", namespace: "team-a", record: record(`{"routes":[{"provider":"anthropic","protocol":"anthropic-messages","models":["*"],"endpointOrigins":["https://api.anthropic.com"]},{"provider":"openai","protocol":"openai-chat","models":["*"],"endpointOrigins":["https://api.openai.com"]}]}`), routes: []sympoziumv1alpha1.CellnExecutionPolicyRoute{anyAnthropic}, status: http.StatusOK,
-			want: CellnMediation{Enabled: true, Routes: []CellnMediatedRoute{anyAnthropicAPI}, Pending: []CellnMediatedRoute{anyOpenAIPending}}},
+			want: CellnMediation{Enabled: true, Open: true, Routes: []CellnMediatedRoute{anyAnthropicAPI}, Pending: []CellnMediatedRoute{anyOpenAIPending}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			profile, policy, objects := mediationFixture()
 			policy.Spec.Routes = append(policy.Spec.Routes, tc.routes...)
+			policy.Spec.ModelAccess = tc.modelAccess
 			objects = append(objects, profile, policy)
 			if tc.record != nil {
 				objects = append(objects, tc.record)

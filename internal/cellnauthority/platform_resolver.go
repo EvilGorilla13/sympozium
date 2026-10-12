@@ -603,9 +603,17 @@ func resolveDecisionRoute(s platformSnapshot, required bool) (DecisionRouteBindi
 	if err != nil {
 		return empty, deny(ReasonRouteMismatch, "%v", err)
 	}
+	// An Agent's own route to a public HTTPS endpoint (its own key, or none)
+	// needs no declared entry under open model access: the gateway still dials
+	// only public addresses for it. Host-profile credentials, plain HTTP and
+	// private origins are operator authority and always need an exact route.
+	public := auth != "host-profile" && strings.HasPrefix(strings.ToLower(origin), "https://") && !c.Spec.AllowInsecure
 	for _, policy := range s.Policies {
-		allowed := false
+		allowed := public && policy.Spec.OpenModelAccess()
 		for _, candidate := range policy.Spec.Routes {
+			if allowed {
+				break
+			}
 			// A plain-HTTP origin needs the operator's approval on the policy
 			// route itself, not only on the tenant's connection. Origins are
 			// always exact; the model is exact unless the route admits any

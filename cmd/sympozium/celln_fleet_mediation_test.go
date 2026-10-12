@@ -116,7 +116,7 @@ func TestMediationSummary(t *testing.T) {
 		record cellninstall.MediationRecord
 		want   string
 	}{
-		{name: "enabled without a route warns", record: cellninstall.MediationRecord{Enabled: true}, want: "AUTH_ROUTE_MISMATCH"},
+		{name: "enabled without a route is open", record: cellninstall.MediationRecord{Enabled: true}, want: "any public HTTPS provider"},
 		{name: "backends", record: cellninstall.MediationRecord{Enabled: true, MediateBackends: true}, want: "every HTTPS backend of this fleet"},
 		{name: "a route", record: cellninstall.MediationRecord{Enabled: true, Routes: []cellninstall.MediatedRoute{{Provider: "openai", Protocol: "openai-chat", Models: []string{"a", "b"}, EndpointOrigins: []string{"https://api.openai.com"}}}}, want: "openai/a+b (openai-chat) at https://api.openai.com"},
 	} {

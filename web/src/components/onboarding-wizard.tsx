@@ -49,7 +49,7 @@ import { CellnKeyStep, CellnModelStep, CellnRouteStep, OwnKeyProgress } from "@/
 import { useCapabilities, useModels, useCellnMediation, useCellnPlatformProfiles } from "@/hooks/use-api";
 import { persistentHarnesses, persistentHarnessName } from "@/lib/persistent-harness";
 import { modelConnectionName, modelConnectionEndpoint, describeEnduringLimits } from "@/lib/agent-execution";
-import { OwnKeyError, ownKeyConnectionSpec, defaultEndpointPath, initialModelFor, routeAllowsModel, enduringForOutputTokens, keyChoiceReady, managedSecretName, prepareOwnKeyBackend, profileForRoute, ownKeySelection, type KeyChoice, type OwnKeyStep } from "@/lib/celln-own-key";
+import { OwnKeyError, ownKeyConnectionSpec, defaultEndpointPath, httpsOrigin, initialModelFor, routeAllowsModel, enduringForOutputTokens, keyChoiceReady, managedSecretName, prepareOwnKeyBackend, profileForRoute, ownKeySelection, type KeyChoice, type OwnKeyStep } from "@/lib/celln-own-key";
 import { parseMaxOutputTokens, parseModelParameters } from "@/lib/model-parameters";
 import { api, getNamespace } from "@/lib/api";
 import { Link } from "react-router-dom";
@@ -699,7 +699,7 @@ export function OnboardingWizard({
   const compatibleRuntime = celln ? !!cellnProfile : !form.runtimeRef || !!selectedRuntime?.spec.image;
   // Provider choices come from the shared creation model so the Run dialog and
   // this wizard can never drift into showing a provider the plane cannot reach.
-  // (The Celln plane offers the operator's declared routes instead.)
+  // (The Celln plane lists the same providers through CellnRouteStep.)
   const providerChoices = useMemo(
     () =>
       providersForPlane(PROVIDERS, {
@@ -815,7 +815,7 @@ export function OnboardingWizard({
           return !!form.secretName || !!form.awsRegion;
         return !!form.secretName || !!form.apiKey;
       case "model":
-        if (celln) return !!cellnRoute && routeAllowsModel(cellnRoute, form.model) && cellnRoute.endpointOrigins.includes(cellnOrigin) && cellnPath.startsWith("/") && !cellnParsedParameters.error && !cellnParsedTokens.error;
+        if (celln) return !!cellnRoute && routeAllowsModel(cellnRoute, form.model) && (cellnRoute.open ? !!httpsOrigin(cellnOrigin) : cellnRoute.endpointOrigins.includes(cellnOrigin)) && cellnPath.startsWith("/") && !cellnParsedParameters.error && !cellnParsedTokens.error;
         return !!form.model;
       case "skills":
         return !form.runtimeRef || !form.skills.some((skill) => harnessIncompatibleSkills.includes(skill));
@@ -894,7 +894,7 @@ export function OnboardingWizard({
     try {
       const prepared = await prepareOwnKeyBackend({
         connectionName: modelConnectionName(result.name),
-        selection: { route: cellnRoute, origin: cellnOrigin, path: cellnPath, model: result.model, parameters: cellnParsedParameters.parameters, maxOutputTokens: cellnParsedTokens.maxOutputTokens },
+        selection: { route: cellnRoute, origin: cellnRoute.open ? httpsOrigin(cellnOrigin) : cellnOrigin, path: cellnPath, model: result.model, parameters: cellnParsedParameters.parameters, maxOutputTokens: cellnParsedTokens.maxOutputTokens },
         key: cellnKey,
         profile: cellnProfile,
         agentName: result.name,
@@ -1218,7 +1218,7 @@ export function OnboardingWizard({
                 <div className="space-y-2 rounded-md border p-3">
                   <Label>Enduring Celln parent</Label>
                   <p className="text-xs text-muted-foreground">
-                    This Agent owns its model backend: next you choose a provider the operator declared for this namespace, give the Agent its own key, and pick one of the declared models. Nothing is shared with another Agent. It gets the fleet's starter toolbox (run workspace files and public HTTPS web tools); SkillPacks, borrowed tools, channels and heartbeats are not part of a Celln Agent. {capabilities?.celln?.available ? capabilities.celln.reason : `Celln readiness: ${capabilities?.celln?.state || "unknown"} — ${capabilities?.celln?.reason || "not confirmed"}.`}
+                    This Agent owns its model backend: next you choose a provider, give the Agent its own key, and pick a model, as for any other Agent. Nothing is shared with another Agent. It gets the fleet's starter toolbox (run workspace files and public HTTPS web tools); SkillPacks, borrowed tools, channels and heartbeats are not part of a Celln Agent. {capabilities?.celln?.available ? capabilities.celln.reason : `Celln readiness: ${capabilities?.celln?.state || "unknown"} — ${capabilities?.celln?.reason || "not confirmed"}.`}
                   </p>
                 </div>
               )}
@@ -1238,7 +1238,7 @@ export function OnboardingWizard({
           />
         )}
         {step === "provider" && celln && cellnRoute && !cellnProfile && !platformProfiles.isLoading && (
-          <p role="alert" className="text-xs text-red-400">No fleet runtime profile of policy <code>{cellnRoute.policy}</code> is offered to this namespace, so an Agent on this provider could not run. Ask the operator to check the policy with <code>sympozium doctor</code>.</p>
+          <p role="alert" className="text-xs text-red-400">No fleet runtime profile {cellnRoute.policy ? <>of policy <code>{cellnRoute.policy}</code> </> : ""}is offered to this namespace, so an Agent on this provider could not run. Ask the operator to check the policy with <code>sympozium doctor</code>.</p>
         )}
         {step === "provider" && celln && cellnProfile?.mediationOnly && (
           <p className="text-xs text-muted-foreground" data-testid="celln-starter-agent-note">

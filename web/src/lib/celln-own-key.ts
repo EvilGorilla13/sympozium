@@ -1,7 +1,9 @@
 // A native Celln Agent owns its model backend: a namespaced ModelConnection
-// backed by a Secret in the Agent's namespace, matched against a provider
-// route the operator declared (exact origin; exact model, or any model when the
-// route declares ["*"]) (docs/guides/celln-mediated-model-access.md).
+// backed by a Secret in the Agent's namespace. Under open model access (the
+// default) it may name any public HTTPS provider endpoint and model; otherwise,
+// and always for plain-HTTP or private endpoints, it is matched against a
+// provider route the operator declared (exact origin; exact model, or any
+// model when the route declares ["*"]) (docs/guides/celln-mediated-model-access.md).
 // Nothing here ever keeps an API key: it is handed to the API once and dropped.
 import { ApiError, api } from "@/lib/api";
 import type { CellnMediatedRoute, CellnPlatformProfile, EnduringLimits, ModelConnection } from "@/lib/api";
@@ -18,7 +20,43 @@ export const GUIDE_URL = "https://github.com/sympozium-ai/sympozium/blob/main/do
 
 /** Stable identity of a declared route, for select values. */
 export function routeId(route: CellnMediatedRoute): string {
+  if (route.open) return `open|${route.provider}`;
   return [route.policy || "", route.provider, route.protocol, route.auth || "secret", ...route.endpointOrigins].join("|");
+}
+
+/** The public endpoint origin of a hosted provider; absent when it is the user's own. */
+const PROVIDER_ORIGINS: Record<string, string> = {
+  openai: "https://api.openai.com",
+  anthropic: "https://api.anthropic.com",
+};
+
+/**
+ * A provider chosen under open model access: the Agent's own key, any model,
+ * any public HTTPS origin (the hosted provider's by default).
+ */
+export function openRoute(provider: string): CellnMediatedRoute {
+  const protocol = provider === "anthropic" ? "anthropic-messages" : "openai-chat";
+  const origin = PROVIDER_ORIGINS[provider];
+  return { provider, protocol, models: ["*"], anyModel: true, endpointOrigins: origin ? [origin] : [], auth: "secret", secretKey: protocol === "anthropic-messages" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY", open: true };
+}
+
+/**
+ * Whether open model access admits a route without a declared entry: the
+ * resolver's rule (internal/cellnauthority) — public HTTPS origins and no
+ * private-endpoint approval. Plain HTTP and private origins need a route.
+ */
+export function openAdmits(route: Pick<CellnMediatedRoute, "endpointOrigins" | "allowInsecure">): boolean {
+  return !route.allowInsecure && route.endpointOrigins.length > 0 && route.endpointOrigins.every((origin) => origin.toLowerCase().startsWith("https://"));
+}
+
+/** The origin of a user-typed HTTPS origin (scheme and host only), or "" when it is not one. */
+export function httpsOrigin(text: string): string {
+  try {
+    const url = new URL(text.trim());
+    return url.protocol === "https:" && (url.pathname === "/" || url.pathname === "") && !url.search && !url.hash ? url.origin : "";
+  } catch {
+    return "";
+  }
 }
 
 const SUGGESTED_MODELS: Record<string, string> = { openai: "gpt-4o", anthropic: "claude-sonnet-4-20250514", deepseek: "deepseek-chat" };
@@ -76,11 +114,16 @@ export function ownKeyConnectionSpec(selection: OwnKeySelection, secretRef?: str
   };
 }
 
-/** The route a connection was made from, if the operator still declares it. */
-export function routeForConnection(connection: ModelConnection, model: string, routes: CellnMediatedRoute[]): CellnMediatedRoute | undefined {
+/**
+ * The route that admits a connection: one the operator declares, or, under
+ * open model access, the connection's own public HTTPS route.
+ */
+export function routeForConnection(connection: ModelConnection, model: string, routes: CellnMediatedRoute[], open = false): CellnMediatedRoute | undefined {
   let origin = "";
   try { origin = new URL(connection.spec.endpoint).origin; } catch { /* matched as no route */ }
-  return routes.find((route) => (route.auth === "none") === !connection.spec.secretRef && route.provider === connection.spec.provider && route.protocol === connection.spec.protocol && route.endpointOrigins.includes(origin) && routeAllowsModel(route, model));
+  const declared = routes.find((route) => (route.auth === "none") === !connection.spec.secretRef && route.provider === connection.spec.provider && route.protocol === connection.spec.protocol && route.endpointOrigins.includes(origin) && routeAllowsModel(route, model));
+  if (declared || !open || !origin || !openAdmits({ endpointOrigins: [origin], allowInsecure: connection.spec.allowInsecure })) return declared;
+  return { ...openRoute(connection.spec.provider), protocol: connection.spec.protocol, endpointOrigins: [origin], ...(connection.spec.secretRef ? {} : { auth: "none" as const, secretKey: "" }) };
 }
 
 /**

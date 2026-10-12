@@ -175,11 +175,13 @@ type CellnExecutionPolicyTool struct {
 	Limits *CellnToolLimits `json:"limits,omitempty"`
 }
 
-// CellnExecutionPolicyRoute is explicit model endpoint authority. A tenant
-// ModelConnection may choose only a route contained by one of these entries.
+// CellnExecutionPolicyRoute is explicit model endpoint authority. Under the
+// policy's modelAccess "declared", a tenant ModelConnection may choose only a
+// route contained by one of these entries; under "open" (the default) an
+// entry is needed only for host-profile, plain-HTTP and private origins.
 // Models are exact names, or exactly ["*"] (CellnAnyModel) for any model name
 // of the route's provider at its exact endpoint origins; origins are never a
-// pattern, so a key only ever goes to the origins listed here.
+// pattern.
 // +kubebuilder:validation:XValidation:rule="!self.models.exists(m, m == '*') || (self.models.size() == 1 && self.auth != 'host-profile')",message="the any-model token '*' must be a route's only model and is not allowed on a host-profile route"
 // +kubebuilder:validation:XValidation:rule="self.endpointOrigins.all(x, x.startsWith('https://') || (x.startsWith('http://') && self.auth in ['none', 'host-profile'] && has(self.allowInsecure) && self.allowInsecure))",message="Secret routes require https; http requires auth none or host-profile and explicit allowInsecure"
 type CellnExecutionPolicyRoute struct {
@@ -266,6 +268,15 @@ type CellnExecutionPolicySpec struct {
 	// +listType=set
 	// +kubebuilder:validation:items:Enum=direct-one-shot;harness-one-shot;enduring
 	Lifecycles []string `json:"lifecycles"`
+	// ModelAccess says which model routes an Agent's own ModelConnection may
+	// use. "open" (the default): any public HTTPS endpoint, with the Agent's
+	// own key or none, for any model; the model gateway still refuses private
+	// and loopback addresses. "declared": only an exact entry of routes.
+	// Host-profile, plain-HTTP and private origins need an exact route under
+	// either mode.
+	// +kubebuilder:validation:Enum=open;declared
+	// +optional
+	ModelAccess string `json:"modelAccess,omitempty"`
 	// +kubebuilder:validation:MaxItems=32
 	// +listType=atomic
 	Routes   []CellnExecutionPolicyRoute  `json:"routes"`
@@ -296,6 +307,17 @@ type CellnExecutionPolicyStatus struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=8
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+const (
+	CellnModelAccessOpen     = "open"
+	CellnModelAccessDeclared = "declared"
+)
+
+// OpenModelAccess reports whether the policy admits an Agent's own public
+// HTTPS model route without an exact entry in routes.
+func (s CellnExecutionPolicySpec) OpenModelAccess() bool {
+	return s.ModelAccess != CellnModelAccessDeclared
 }
 
 func init() {

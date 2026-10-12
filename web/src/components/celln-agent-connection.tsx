@@ -55,7 +55,7 @@ export function CellnAgentConnection({ agent }: { agent: Agent }) {
   }
 
   const model = execution?.model || connection.spec.models[0];
-  const route = mediation.data ? routeForConnection(connection, model, mediation.data.routes) : undefined;
+  const route = mediation.data ? routeForConnection(connection, model, mediation.data.routes, mediation.data.open) : undefined;
   const runtimeRef = agent.spec.runtimeRef || execution?.cellnSelection?.runtimeRef || "";
   const profile = (profiles.data || []).find((candidate) => candidate.wrapper === runtimeRef);
   const parsedParameters = parseModelParameters(parameters);
@@ -135,7 +135,7 @@ export function CellnAgentConnection({ agent }: { agent: Agent }) {
       </dl>
       {mediation.data && !route && (
         <p role="alert" className="text-xs text-red-400" data-testid="agent-model-backend-no-route">
-          No route the operator declared for this namespace matches {connection.spec.provider} / {connection.spec.protocol} / {model} on {origin(connection.spec.endpoint)}{mediation.data.enabled ? "" : " (mediated model access is disabled)"}, so this Agent's runs are refused AUTH_ROUTE_MISMATCH until an operator declares it.
+          {mediation.data.open ? "Open model access covers only public HTTPS endpoints, and no" : "No"} route the operator declared for this namespace matches {connection.spec.provider} / {connection.spec.protocol} / {model} on {origin(connection.spec.endpoint)}{mediation.data.enabled ? "" : " (mediated model access is disabled)"}, so this Agent's runs are refused AUTH_ROUTE_MISMATCH until an operator declares it.
         </p>
       )}
       {saved && !editing && <p role="status" className="text-xs text-emerald-400">Saved. Start a new conversation to use it.</p>}

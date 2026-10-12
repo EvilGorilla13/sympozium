@@ -703,8 +703,9 @@ func modelsLabel(models []string) string {
 
 // mediationSummary says what the scope's policy was offered for Agents' own keys.
 func mediationSummary(record cellninstall.MediationRecord) string {
+	const open = "Agents may bring their own key for any public HTTPS provider and model (the policy's open model access; set spec.modelAccess: declared to allow only declared routes)."
 	if !record.MediateBackends && len(record.Routes) == 0 {
-		return "Mediated model access is enabled, but no provider route is declared (celln.mediation.defaultRoutes=false): an Agent with its own key is refused AUTH_ROUTE_MISMATCH until you declare one with --celln-mediated-route."
+		return open + " Plain-HTTP or private endpoints need a route declared with --celln-mediated-route."
 	}
 	names := make([]string, 0, len(record.Routes)+1)
 	if record.MediateBackends {
@@ -713,7 +714,7 @@ func mediationSummary(record cellninstall.MediationRecord) string {
 	for _, route := range record.Routes {
 		names = append(names, fmt.Sprintf("%s/%s (%s) at %s", route.Provider, modelsLabel(route.Models), route.Protocol, strings.Join(route.EndpointOrigins, "+")))
 	}
-	return "Agents may bring their own key for: " + strings.Join(names, "; ") + "."
+	return open + " Declared routes: " + strings.Join(names, "; ") + "."
 }
 
 // fleetPackageUnchangedNotice tells an operator upgrading an installed fleet

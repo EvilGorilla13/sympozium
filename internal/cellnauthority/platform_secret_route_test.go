@@ -140,6 +140,18 @@ func TestSecretRouteRefusals(t *testing.T) {
 	anyProvider := func(ctx context.Context, t *testing.T, f platformFixture) {
 		updateAgent(t, ctx, f, func(a *api.Agent) { a.Spec.AuthRefs = []api.SecretRef{{Secret: "model-secret"}} })
 	}
+	declared := func(ctx context.Context, t *testing.T, f platformFixture) {
+		var policies api.CellnExecutionPolicyList
+		if err := f.client.List(ctx, &policies); err != nil {
+			t.Fatal(err)
+		}
+		for i := range policies.Items {
+			policies.Items[i].Spec.ModelAccess = api.CellnModelAccessDeclared
+			if err := f.client.Update(ctx, &policies.Items[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	for _, tc := range []struct {
 		name   string
 		reason string
@@ -152,16 +164,19 @@ func TestSecretRouteRefusals(t *testing.T) {
 				c.Spec = api.ModelConnectionSpec{Provider: "llama", Protocol: "openai-chat", Endpoint: "https://fleet.example/v1/chat/completions", CredentialProfile: "someone-elses-key", Models: []string{"gpt-test"}}
 			})
 		}},
-		// Policy routes stay the operator's allow-list; a tenant-authored
-		// connection is never its own authorisation.
+		// Under declared model access the policy routes are the operator's
+		// allow-list; a tenant-authored connection is never its own authorisation.
 		{name: "provider outside every route", reason: ReasonRouteMismatch, detail: "exact model route", change: func(ctx context.Context, t *testing.T, f platformFixture) {
+			declared(ctx, t, f)
 			anyProvider(ctx, t, f)
 			updateConnection(t, ctx, f, func(c *api.ModelConnection) { c.Spec.Provider = "anthropic" })
 		}},
 		{name: "origin outside every route", reason: ReasonRouteMismatch, detail: "exact model route", change: func(ctx context.Context, t *testing.T, f platformFixture) {
+			declared(ctx, t, f)
 			updateConnection(t, ctx, f, func(c *api.ModelConnection) { c.Spec.Endpoint = "https://attacker.example/v1/chat/completions" })
 		}},
 		{name: "model outside every route", reason: ReasonRouteMismatch, detail: "exact model route", change: func(ctx context.Context, t *testing.T, f platformFixture) {
+			declared(ctx, t, f)
 			updateConnection(t, ctx, f, func(c *api.ModelConnection) { c.Spec.Models = []string{"gpt-test", "unlisted"} })
 			var run api.AgentRun
 			if err := f.client.Get(ctx, f.runKey, &run); err != nil {
@@ -173,6 +188,7 @@ func TestSecretRouteRefusals(t *testing.T) {
 			}
 		}},
 		{name: "fleet origin is a host-profile route only", reason: ReasonRouteMismatch, detail: "exact model route", change: func(ctx context.Context, t *testing.T, f platformFixture) {
+			declared(ctx, t, f)
 			anyProvider(ctx, t, f)
 			updateConnection(t, ctx, f, func(c *api.ModelConnection) {
 				c.Spec.Provider, c.Spec.Endpoint, c.Spec.Models = "llama", "https://fleet.example/v1/chat/completions", []string{"fleet-model", "gpt-test"}
@@ -373,12 +389,15 @@ func TestRequestOutputTokensIsOnlySentOnGatewayMediatedRoutes(t *testing.T) {
 // provider and protocol at its exact origins; the decision still binds the
 // run's concrete model, and nothing else about the route is relaxed.
 func TestAnyModelSecretRoute(t *testing.T) {
+	// These cases test the route list itself, so access is declared: under
+	// open access any public HTTPS model route is admitted without one.
 	setRouteModels := func(ctx context.Context, t *testing.T, f platformFixture, models []string) {
 		var policies api.CellnExecutionPolicyList
 		if err := f.client.List(ctx, &policies); err != nil {
 			t.Fatal(err)
 		}
 		for i := range policies.Items {
+			policies.Items[i].Spec.ModelAccess = api.CellnModelAccessDeclared
 			policies.Items[i].Spec.Routes[1].Models = models
 			if err := f.client.Update(ctx, &policies.Items[i]); err != nil {
 				t.Fatal(err)

@@ -1,7 +1,7 @@
 /**
- * A Celln Agent owns its model backend: a provider route the operator declared
- * for the namespace, the Agent's own key (pasted, or an existing Secret) and
- * one of the route's models. Intercepted browser contract tests — they need no
+ * A Celln Agent owns its model backend: a provider (any public HTTPS one under
+ * open model access, else a route the operator declared for the namespace),
+ * the Agent's own key (pasted, or an existing Secret) and a model. Intercepted browser contract tests — they need no
  * cluster and are not live execution evidence. The Secret's fixed key name is
  * written by the API server (internal/apiserver/server_modelconnections.go,
  * covered by its Go tests); here it is what the console tells the user and
@@ -21,7 +21,7 @@ const profile = {
   sessionDefaults: { leaseSeconds: 14400, maxTurns: 64, maxModelRequests: 384, maxOutputTokens: 196608 },
 };
 
-type Mediation = { enabled: boolean; mediateBackends: boolean; routes: unknown[]; pending: unknown[] };
+type Mediation = { enabled: boolean; mediateBackends: boolean; open?: boolean; routes: unknown[]; pending: unknown[] };
 
 function stub(mediation: Mediation) {
   cy.intercept("GET", "**/api/v1/**", { body: [] });
@@ -65,8 +65,7 @@ describe("Create Agent → Celln: the Agent's own model backend", () => {
       request.reply({ statusCode: 201, body: { metadata: { name: "mine" }, spec: {} } });
     }).as("agent");
     openProviderStep();
-    cy.get('[data-testid="celln-route-select"]').click();
-    cy.get('[role="option"]').first().click();
+    chooseProvider("llama-server");
     next();
     cy.get('[data-testid="celln-keyless-route"]').should("contain", "No API key is required");
     cy.get('[data-testid="celln-api-key"]').should("not.exist");
@@ -99,7 +98,7 @@ describe("Create Agent → Celln: the Agent's own model backend", () => {
   it("says no provider is declared", () => {
     stub({ enabled: true, mediateBackends: false, routes: [], pending: [] });
     openProviderStep();
-    cy.get('[data-testid="celln-no-routes"]').should("contain", "No provider is declared for this namespace").and("contain", "AUTH_ROUTE_MISMATCH");
+    cy.get('[data-testid="celln-no-routes"]').should("contain", "allows only declared providers, and none is declared").and("contain", "AUTH_ROUTE_MISMATCH");
     cy.get('[data-testid="celln-route-command"]').should("contain", "--celln-mediated-route provider=").and("not.contain", "celln.mediation.enabled=true");
     dialog().contains("button", "Next").should("be.disabled");
   });
@@ -144,10 +143,11 @@ describe("Create Agent → Celln: the Agent's own model backend", () => {
     }).as("agent");
 
     openProviderStep();
-    // Only the declared providers, in the Kubernetes plane's visual language.
+    // Declared model access: every one-shot provider is listed, but only the
+    // declared ones can be chosen.
     cy.get('[data-testid="celln-route-select"]').click();
-    cy.get('[role="option"]').should("have.length", 2);
-    cy.get('[role="option"]').contains("OpenAI").should("not.exist");
+    cy.get('[role="option"]').contains("OpenAI").closest('[role="option"]').should("have.attr", "aria-disabled", "true").and("contain", "needs a declared route");
+    cy.get('[role="option"]').contains("llm-gateway").closest('[role="option"]').should("not.have.attr", "aria-disabled");
     cy.get('[role="option"]').contains("Anthropic").click();
     cy.get('[data-testid="celln-route-summary"]').should("contain", "celln-fleet-starter").and("contain", "its own key");
     next();
@@ -223,6 +223,56 @@ describe("Create Agent → Celln: the Agent's own model backend", () => {
     next();
     dialog().contains("button", /Create\s*$/).click();
     cy.wait(["@connection", "@agent"]);
+  });
+
+  it("under open model access offers the one-shot providers and takes any model on a public HTTPS origin", () => {
+    const local = { ...gateway, provider: "llama-server", endpointOrigins: ["http://framework:8080"], auth: "none", allowInsecure: true, secretKey: "" };
+    stub({ enabled: true, mediateBackends: false, open: true, routes: [anthropic, local], pending: [] });
+    cy.intercept("POST", "**/api/v1/model-connections*", (request) => {
+      expect(request.body).to.deep.equal({
+        name: "mine-connection",
+        spec: { provider: "anthropic", protocol: "anthropic-messages", endpoint: "https://api.anthropic.com/v1/messages", models: ["claude-fable-5-1"] },
+        apiKey: KEY,
+      });
+      request.reply({ statusCode: 201, body: { metadata: { name: "mine-connection", namespace: "default" }, spec: { ...request.body.spec, secretRef: "mine-connection-anthropic-key" } } });
+    }).as("connection");
+    cy.intercept("POST", "**/api/v1/celln-platform/wrappers*", { body: { runtime: "celln-native", created: [] } }).as("runtime");
+    cy.intercept("POST", "**/api/v1/agents*", (request) => {
+      expect(request.body.execution.model).to.equal("claude-fable-5-1");
+      request.reply({ statusCode: 201, body: { metadata: { name: "mine", namespace: "default" }, spec: {} } });
+    }).as("agent");
+
+    openProviderStep();
+    cy.get('[data-testid="celln-route-select"]').click();
+    for (const label of ["OpenAI", "Anthropic", "Azure OpenAI", "Custom"]) {
+      cy.get('[role="option"]').contains(label).closest('[role="option"]').should("not.have.attr", "aria-disabled");
+    }
+    // The declared public Anthropic route is inside the open choice, not a second entry.
+    cy.get('[role="option"]').filter((_, el) => el.textContent?.trim() === "Anthropic").should("have.length", 1);
+    // Plain HTTP comes only from a declared route; Bedrock speaks neither protocol.
+    cy.get('[role="option"]').contains("llama-server").closest('[role="option"]').should("contain", "http://framework:8080").and("not.have.attr", "aria-disabled");
+    cy.get('[role="option"]').contains("Ollama").closest('[role="option"]').should("have.attr", "aria-disabled", "true");
+    cy.get('[role="option"]').contains("AWS Bedrock").closest('[role="option"]').should("have.attr", "aria-disabled", "true");
+    cy.get('[role="option"]').filter((_, el) => el.textContent?.trim() === "Anthropic").click();
+    cy.get('[data-testid="celln-route-summary"]').should("contain", "Any model").and("contain", "its own key");
+    next();
+    cy.get('[data-testid="celln-api-key"]').type(KEY, { log: false });
+    next();
+
+    cy.get('[data-testid="celln-models"]').should("not.exist");
+    cy.get('[data-testid="celln-origin-input"]').should("have.value", "https://api.anthropic.com");
+    cy.get('[data-testid="celln-endpoint-path"]').should("have.value", "/v1/messages");
+    cy.get('[data-testid="celln-model-name"]').clear();
+    dialog().contains("button", "Next").should("be.disabled");
+    cy.get('[data-testid="celln-model-name"]').type("claude-fable-5-1");
+    // A plain-HTTP origin is not open access.
+    cy.get('[data-testid="celln-origin-input"]').clear().type("http://api.anthropic.com");
+    dialog().contains("button", "Next").should("be.disabled");
+    cy.get('[data-testid="celln-origin-input"]').clear().type("https://api.anthropic.com");
+    next();
+    dialog().contains("button", /Create\s*$/).click();
+    cy.wait(["@connection", "@runtime", "@agent"]);
+    cy.get('[role="dialog"]').should("not.exist");
   });
 
   it("links an existing Secret that already holds the protocol's key, with a kubectl prompt and a refresh", () => {

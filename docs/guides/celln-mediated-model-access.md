@@ -247,9 +247,33 @@ CA.
 
 ## 5. Declare which providers Agents may bring a key for
 
-The resolver matches an Agent's `ModelConnection` against the `auth: secret`
-routes of the scope's `CellnExecutionPolicy`, and refuses everything else with
-`AUTH_ROUTE_MISMATCH`.
+**Model access.** `CellnExecutionPolicy.spec.modelAccess` decides what an
+Agent's own `ModelConnection` may name:
+
+- **`open`** (the default, also when the field is unset): any provider and model
+  on a **public HTTPS** origin, with the Agent's own key (`auth: secret`) or none,
+  the same choice the one-shot Kubernetes wizard offers. The gateway still dials
+  only public addresses for such a route, so it cannot be pointed at the cluster
+  network. Create Agent → Celln lists every one-shot provider.
+- **`declared`**: only a route below; everything else is refused
+  `AUTH_ROUTE_MISMATCH`, and the console offers only the declared providers.
+
+Under either mode, `host-profile` credentials, plain-HTTP origins and private
+origins (`allowInsecure`) need a route: they reach the node's or the cluster
+network's own endpoints, which only the operator may approve. A run must be
+admitted by **every** policy selecting its namespace, so one `declared` policy
+makes the namespace declared.
+
+What open access trusts: whoever can write a `ModelConnection` in a namespace
+chooses where that namespace's granted Secret is sent. The Secret must still be
+granted by the Agent (`authRefs` or its execution defaults), and agent pods have
+no RBAC to write connections, but where a tenant must not choose destinations,
+set `modelAccess: declared`; the rest of this section then applies to every
+route.
+
+Under `declared` access the resolver matches an Agent's `ModelConnection`
+against the `auth: secret` routes of the scope's `CellnExecutionPolicy`, and
+refuses everything else with `AUTH_ROUTE_MISMATCH`.
 
 **Built-in routes.** When mediation is enabled and you declare no route, the
 chart records three, so an Agent can bring its own key for any model of a
@@ -273,8 +297,9 @@ declare one. Like every route, they reach the policy on the next
 The default install also sets `mediateBackends`, which admits each HTTPS fleet
 backend's provider and exact model (the starter Agent's among them).
 
-Why the operator, and not the Agent's owner: a `ModelConnection` is written by a
-tenant, and a tenant-authored endpoint is not authorisation. If the connection
+Why the operator, and not the Agent's owner, under `declared` access: a
+`ModelConnection` is written by a tenant, and a tenant-authored endpoint is not
+authorisation. If the connection
 alone decided where a namespace's Secret may be sent, anything that can write a
 `ModelConnection` (including a prompt-injected agent with that permission) could
 point a key, or the gateway's egress, at a host of its choosing. The route list
@@ -349,19 +374,21 @@ path pass them (`--set`) again on a rerun, or the default takes over.
 
 `sympozium doctor` reports the state ("Mediated model access"): disabled, or
 enabled with the five bootstrap objects present, the gateway ready and the
-routes the policy carries; it warns when no route is published or a declared
-one is not in the policy yet. The console reads the same through
+routes the policy carries, and whether its model access is open; it warns when
+a `declared` policy publishes no route, or a declared route that open access
+does not already cover is not in the policy yet. The console reads the same through
 `GET /api/v1/celln-platform/mediation?namespace=<ns>`:
 
 ```json
-{"enabled": true, "mediateBackends": false,
+{"enabled": true, "mediateBackends": false, "open": true,
  "routes":  [{"provider": "anthropic", "protocol": "anthropic-messages", "models": ["claude-opus-5", "claude-sonnet-5"],
               "endpointOrigins": ["https://api.anthropic.com"], "policy": "celln-fleet-starter", "secretKey": "ANTHROPIC_API_KEY"}],
  "pending": []}
 ```
 
+`open` is true when every policy selecting the namespace has open model access;
 `routes` are the ones the namespace's policies carry now (what a run is matched
-against); `pending` are declared routes no policy carries yet. A route with
+against beyond open access); `pending` are declared routes no policy carries yet. A route with
 `models: ["*"]` also carries `"anyModel": true`, and the console then asks for
 the model name (prefilled with a well-known one) instead of offering a list.
 
@@ -521,8 +548,9 @@ in `GET /v1/capabilities`). A node running an older Celln refuses the run with
 `AUTH_PROTOCOL_UNSUPPORTED` before any model request or native work; upgrade
 the fleet package, or remove the tools from the selection to chat only.
 
-A run of this Agent is resolved against the policy's `secret` routes. If it is
-refused `AUTH_ROUTE_MISMATCH`, compare the connection's provider, protocol,
+A run of this Agent is resolved against the policy's model access and `secret`
+routes. If it is refused `AUTH_ROUTE_MISMATCH` under `declared` access (or for a
+plain-HTTP or private endpoint), compare the connection's provider, protocol,
 endpoint origin and the run's model with the routes `sympozium doctor` lists:
 all four must match one route.
 

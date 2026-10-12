@@ -1,6 +1,7 @@
 package apiserver
 
 import (
+	"context"
 	"net/http"
 	"reflect"
 	"slices"
@@ -8,7 +9,11 @@ import (
 	api "github.com/sympozium-ai/sympozium/api/v1alpha1"
 	"github.com/sympozium-ai/sympozium/internal/cellninstall"
 	"github.com/sympozium-ai/sympozium/internal/cellnplatform"
+	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Which providers an Agent in a namespace may bring its own key for. Read
@@ -54,6 +59,10 @@ type CellnMediation struct {
 	// MediateBackends reports that the operator also offers every HTTPS fleet
 	// backend's route to an Agent's own key.
 	MediateBackends bool `json:"mediateBackends"`
+	// Open reports that every execution policy selecting the namespace has
+	// open model access: an Agent may bring its own key for any public HTTPS
+	// provider endpoint and model, not only the routes listed here.
+	Open bool `json:"open"`
 	// Routes are the mediated routes the namespace's policies carry now.
 	Routes []CellnMediatedRoute `json:"routes"`
 	// Pending are routes the operator declared that no policy in the cluster
@@ -95,12 +104,16 @@ func (s *Server) getCellnMediation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var policies api.CellnExecutionPolicyList
-	if len(record.Routes) != 0 {
-		if err := s.client.List(r.Context(), &policies); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	if err := s.client.List(r.Context(), &policies); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	open, err := namespaceModelAccessOpen(r.Context(), s.client, ns, policies.Items)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out.Open = record.Enabled && open
 	for _, declared := range record.Routes {
 		route, err := declared.PolicyRoute()
 		if err != nil {
@@ -113,4 +126,30 @@ func (s *Server) getCellnMediation(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, out)
+}
+
+// namespaceModelAccessOpen mirrors the resolver: a run must be admitted by
+// every live policy selecting the namespace, so access is open only when at
+// least one selects it and none of them is "declared".
+func namespaceModelAccessOpen(ctx context.Context, c client.Client, namespace string, policies []api.CellnExecutionPolicy) (bool, error) {
+	var ns corev1.Namespace
+	if err := c.Get(ctx, client.ObjectKey{Name: namespace}, &ns); err != nil {
+		return false, err
+	}
+	selected := false
+	for i := range policies {
+		policy := &policies[i]
+		if policy.DeletionTimestamp != nil {
+			continue
+		}
+		selector, err := metav1.LabelSelectorAsSelector(&policy.Spec.NamespaceSelector)
+		if err != nil || !selector.Matches(labels.Set(ns.Labels)) {
+			continue
+		}
+		if !policy.Spec.OpenModelAccess() {
+			return false, nil
+		}
+		selected = true
+	}
+	return selected, nil
 }
