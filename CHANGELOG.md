@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.5](https://github.com/sympozium-ai/sympozium/compare/v0.11.4...v0.11.5) (2026-10-12)
+
+
+### Features
+
+* prove per-Agent keys in the journey; attribute refusals and cells ([#662](https://github.com/sympozium-ai/sympozium/issues/662)) ([7944bba](https://github.com/sympozium-ai/sympozium/commit/7944bba0d27f48a2ef5a01abdd3d2a893ac2cb32))
+
+
+### Bug Fixes
+
+* **celln:** Create Agent → Celln offers the same providers as one-shot ([4315c63](https://github.com/sympozium-ai/sympozium/commit/4315c6388ab0850b496e3b7870e8cbeff94ec28b))
+* **celln:** Create Agent → Celln offers the same providers as one-shot ([a4f131d](https://github.com/sympozium-ai/sympozium/commit/a4f131dbe34906076e998af674c216aa406b0389))
+
 ## [0.11.4](https://github.com/sympozium-ai/sympozium/compare/v0.11.3...v0.11.4) (2026-10-07)
 
 
