@@ -54,7 +54,7 @@ func (r *AgentRunTurnReconciler) Reconcile(ctx context.Context, request ctrl.Req
 		}
 		return r.removeTurnFinalizer(ctx, &turn)
 	}
-	if condition := meta.FindStatusCondition(turn.Status.Conditions, "CellnTurnComplete"); condition != nil && condition.Status == metav1.ConditionTrue && condition.Reason == "CancelledBeforeAdmission" {
+	if condition := meta.FindStatusCondition(turn.Status.Conditions, "CellnTurnComplete"); condition != nil && condition.Status == metav1.ConditionTrue && (condition.Reason == "CancelledBeforeAdmission" || condition.Reason == "RefusedBeforeAdmission") {
 		return r.removeTurnFinalizer(ctx, &turn)
 	}
 	if turn.Spec.CancelRequested && turn.Status.CellnScoped == nil {
@@ -129,6 +129,20 @@ func (r *AgentRunTurnReconciler) Reconcile(ctx context.Context, request ctrl.Req
 	if turn.Status.CellnScoped == nil {
 		prepared, err := r.ScopedDispatcher.PrepareTurn(ctx, client.ObjectKeyFromObject(parent), client.ObjectKeyFromObject(&turn), originalFinal, parent.Status.CellnScoped.ParentIncarnation)
 		if err != nil {
+			if reason := cellnauthority.PlatformReason(err); reason != "" {
+				// A definitive refusal of this turn's authority (the Agent, its
+				// connection, policy or tools no longer match what the
+				// conversation was admitted under) is final: nothing native
+				// started, and retrying would wait forever. The conversation
+				// itself stays as it is; the caller starts a new one.
+				if err := r.updateTurnStatus(ctx, &turn, func(current *api.AgentRunTurn) error {
+					meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{Type: "CellnTurnComplete", Status: metav1.ConditionTrue, Reason: "RefusedBeforeAdmission", Message: reason + ": the turn's authority no longer matches the conversation's admitted authority; no native operation was started. Start a new conversation.", ObservedGeneration: current.Generation})
+					return nil
+				}); err != nil {
+					return ctrl.Result{}, err
+				}
+				return r.removeTurnFinalizer(ctx, &turn)
+			}
 			return r.turnUncertain(ctx, &turn, "PreparationUnconfirmed", err)
 		}
 		final, err := r.ScopedDispatcher.EnsureTurnFinal(ctx, prepared, originalFinal)

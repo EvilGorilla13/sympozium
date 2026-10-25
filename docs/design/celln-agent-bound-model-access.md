@@ -435,6 +435,64 @@ all of that deployed, the three concurrent runs (a conversation through the
 messages API, one through the OpenAI endpoint, and a one-shot) each answered
 from live September and October 2026 sources in 113 to 152 seconds.
 
+### Where the time went, and what was cut (2026-10-25)
+
+A one-second timeline of a solo one-shot, with timing traces in the Celln
+dispatcher (`CELLN_TRACE=1`: parent fork, boot to grant, each mailbox
+exchange, turn reserve and worker, every broker fetch, every guest `CELLN:`
+console marker) and debug-level step timings in the controller, gave this
+budget for a 78-second run: 6 to 12 s of controller admission, 6 s inside
+the receiver before the parent fork, 0.2 s parent boot, 3.8 s of the worker
+guest hashing its 22-tool closure, 3.5 s of the worker building its prompt,
+then two model requests (a tool call and the answer) of 20 and 43 s, of
+which 9.5 s was re-reading fetched text and 33 s was generating 351 tokens
+at 11 tokens a second.
+
+Cut on the host side: the warm template cache held one template, so the
+parent and worker templates evicted each other and every start rebooted
+both (now up to four, start-to-fork 6.3 s → 0.3 s); the controller
+revalidated authority on every pre-start pass and the resolver read each of
+the 22 cluster tools with its own uncached API Get, twice per resolution
+(now one List, revalidated once before start: 2 s → 30 ms); the AgentRun
+controller reconciled one run at a time (now four, so three admissions no
+longer queue); the admission ledger took its file lock non-blocking and
+reported any contention as `AUTH_CONTEXT_LOST`, which the controller treats
+as a lost node and ends the run (now a bounded wait, and contention is
+`AUTH_UNAVAILABLE`, a retry). Cut on the model side by the test Agents'
+persona alone: fetch live sources with no preamble and in one response, the
+Wikipedia plain-text extract instead of the JSON summary, and an answer of
+at most 90 words. A solo one-shot now takes about 51 s with a warm cache
+and a cached prompt prefix, of which about 45 s is the model; the three
+concurrent runs answer in 58 to 85 s (from 113 to 152 s), with the two
+conversations continuing as turns on a second ask rather than starting over.
+
+A second shape of the same test, closer to real use (fetch a page, write
+its text to a file, write a small parser script, list the workspace, then
+report), ran three ways three times: seven of nine cells completed in 99 to
+185 s with four or five tool calls each; the other two spent the turn's
+five-call budget on a redundant call (a second fetch, a rewrite of the
+script) and the guest harness ends the turn when the model asks for more
+calls than remain, so the conversation's first turn failed. Two parallel
+writes with the same workspace revision are refused and the model retries
+with the bumped revision, which is the intended optimistic-concurrency
+behaviour. Found and fixed on the way: a turn whose authority no longer
+matched the conversation's (the Agent had been replaced) was retried every
+five seconds for ever as "PreparationUnconfirmed" (now refused at once as
+`RefusedBeforeAdmission`), and a conversation that fails on its first turn
+now carries the turn's own reason in its error and through the OpenAI
+endpoint, instead of only "cleanup confirmed".
+
+Left as follow-ups, all on the guest or the provider side: the per-turn
+tool-call budget (five calls, six model requests, a constant of the shared
+permit contract) is tight for multi-step work and the guest harness should
+answer an over-budget request with a tool error rather than ending the turn;
+the worker hashes every lent tool before it runs (a toolbox profile requires a run to
+select all of its tools, so a leaner per-Agent toolbox needs a resolver
+design change); the worker spends about 3.5 s building its prompt before the
+first request; llama-server runs two slots for three cells and generates at
+about 11 tokens a second, so speculative decoding or a third slot on the
+operator's server would be the next large saving.
+
 ## Decisions (2026-10-22, revised after review)
 
 1. **Pi and Hermes in a cell are deferred** past 0.12 (reversed after review;

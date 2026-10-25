@@ -379,7 +379,12 @@ func (s *Server) readAgentAnswer(ctx context.Context, ns string, out *AgentMessa
 		reason := run.Status.Result
 		if reason == "" {
 			reason = "run failed"
-			if n := len(run.Status.Conditions); n > 0 {
+			if run.Status.Error != "" {
+				// The run's own error says why (a refused turn, an exhausted
+				// tool budget, a lost node); a cleanup condition only says that
+				// the native owner has gone.
+				reason = "run failed: " + run.Status.Error
+			} else if n := len(run.Status.Conditions); n > 0 {
 				reason = fmt.Sprintf("run failed: %s: %s", run.Status.Conditions[n-1].Reason, run.Status.Conditions[n-1].Message)
 			}
 		}

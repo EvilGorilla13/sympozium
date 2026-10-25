@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -27,6 +28,26 @@ import (
 func scopedUncertainExpired(run *api.AgentRun, now time.Time) bool {
 	c := meta.FindStatusCondition(run.Status.Conditions, "CellnScopedExecution")
 	return c != nil && c.Status == metav1.ConditionUnknown && c.Reason == "NativeOwnerUncertain" && now.Sub(c.LastTransitionTime.Time) > scopedUncertainGrace
+}
+
+// boundedTurnFailure keeps the first line of a failed turn's text, cut to a
+// size that fits a status field.
+func boundedTurnFailure(text string) string {
+	const limit = 512
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		text = text[:i]
+	}
+	// The owner's cause comes first, then everything the worker printed. Keep
+	// the cause and the harness's own error line, not the event stream.
+	cause, printed, _ := strings.Cut(text, " CELLN_HARNESS_EVENT ")
+	cause = strings.TrimSuffix(strings.TrimSpace(cause), ":")
+	if i := strings.LastIndex(printed, "CELLN_HARNESS_ERROR "); i >= 0 {
+		cause += ": " + strings.TrimPrefix(printed[i:], "CELLN_HARNESS_ERROR ")
+	}
+	if len(cause) > limit {
+		cause = cause[:limit] + "…"
+	}
+	return cause
 }
 
 // scopedUncertainGrace is how long an owner may report its context
@@ -186,7 +207,17 @@ func (r *AgentRunReconciler) reconcilePendingScoped(ctx context.Context, log log
 			return ctrl.Result{}, err
 		}
 	}
+	// Admission timing at debug level: how long each receiver and gateway step
+	// took, and how long after creation the first step ran.
+	step := func(name string, began time.Time) {
+		log.V(1).Info("Scoped Celln admission step", "step", name, "ms", time.Since(began).Milliseconds(), "sinceCreation", time.Since(run.CreationTimestamp.Time).Round(time.Millisecond).String())
+	}
+	if run.Status.CellnScoped == nil {
+		step("first reconcile", time.Now())
+	}
+	began := time.Now()
 	prepared, err := r.ScopedDispatcher.Prepare(ctx, client.ObjectKeyFromObject(run))
+	step("prepare", began)
 	if err != nil {
 		if reason := cellnauthority.PlatformReason(err); reason != "" && run.Status.CellnScoped == nil {
 			// No external enrollment/start can precede the persisted scoped
@@ -199,13 +230,17 @@ func (r *AgentRunReconciler) reconcilePendingScoped(ctx context.Context, log log
 		}
 		return r.scopedUncertain(ctx, run, "PreparationUnconfirmed", err)
 	}
+	began = time.Now()
 	final, err := r.ScopedDispatcher.EnsureFinal(ctx, prepared)
+	step("final decision", began)
 	if err != nil {
 		return r.scopedUncertain(ctx, run, "FinalDecisionUnconfirmed", err)
 	}
+	began = time.Now()
 	if err := r.persistScopedBinding(ctx, run, prepared, final); err != nil {
 		return ctrl.Result{}, err
 	}
+	step("persist binding", began)
 	if run.Status.CellnScoped == nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -221,14 +256,28 @@ func (r *AgentRunReconciler) reconcilePendingScoped(ctx context.Context, log log
 		return ctrl.Result{}, err
 	}
 
-	if !run.Status.CellnScoped.StartAttempted {
-		if err := r.ScopedDispatcher.RevalidateAdmission(ctx, prepared); err != nil {
+	// Authority is revalidated once, on the pass that starts execution: the
+	// receiver's prepare on the enrolment pass executes nothing, and a change
+	// between prepare and start is caught at start, which is the only side
+	// effect that matters. Revalidating on every pass cost two seconds each.
+	if !run.Status.CellnScoped.StartAttempted && run.Status.CellnScoped.ReceiverID != "" {
+		began = time.Now()
+		err := r.ScopedDispatcher.PreflightArtifacts(ctx, prepared)
+		step("preflight artifacts", began)
+		if err == nil {
+			began = time.Now()
+			err = r.ScopedDispatcher.RevalidateAuthority(ctx, prepared)
+			step("revalidate authority", began)
+		}
+		if err != nil {
 			return ctrl.Result{}, r.failRun(ctx, run, "Scoped authority changed before admission; no replacement execution was submitted")
 		}
 	}
 
 	if run.Status.CellnScoped.ReceiverID == "" {
+		began = time.Now()
 		enrolled, err := r.ScopedDispatcher.Enroll(ctx, prepared, final)
+		step("enroll", began)
 		if err != nil {
 			return r.scopedUncertain(ctx, run, "ReceiverEnrollmentUnconfirmed", err)
 		}
@@ -268,9 +317,11 @@ func (r *AgentRunReconciler) reconcilePendingScoped(ctx context.Context, log log
 			}
 			run.Status.CellnScoped.GatewayRegistrationAttempted = true
 		}
+		began = time.Now()
 		if err := r.ScopedDispatcher.RegisterGateway(ctx, final, decision, execution); err != nil {
 			return r.scopedUncertain(ctx, run, "GatewayRegistrationUnconfirmed", err)
 		}
+		step("register gateway", began)
 		if err := r.updateScopedStatus(ctx, run, func(s *api.CellnScopedStatus) error { s.GatewayRegistered = true; return nil }); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -282,7 +333,9 @@ func (r *AgentRunReconciler) reconcilePendingScoped(ctx context.Context, log log
 		}
 		run.Status.CellnScoped.StartAttempted = true
 	}
+	began = time.Now()
 	observed, err := r.ScopedDispatcher.Start(ctx, run.Status.CellnScoped.ReceiverID, run.Status.CellnScoped.Owner, execution, model)
+	step("start", began)
 	if err != nil {
 		return r.scopedUncertain(ctx, run, "ExecutionOutcomeUnconfirmed", err)
 	}
@@ -340,6 +393,7 @@ func (r *AgentRunReconciler) scopedUncertain(ctx context.Context, run *api.Agent
 	if cellnscoped.IsContextLost(cause) {
 		// The node that held this run's native state is gone. Nothing is
 		// re-placed elsewhere; the run ends and cleanup fences its allowance.
+		r.Log.Info("Scoped Celln run ended: its receiver reported the context lost", "run", run.Name, "namespace", run.Namespace, "step", reason, "cause", cause.Error())
 		return ctrl.Result{}, r.failRun(ctx, run, "Celln node holding this run is gone (AUTH_CONTEXT_LOST); no replacement execution is permitted. Start a new run.")
 	}
 	if cellnscoped.IsReceiverMisconfigured(cause) {
@@ -547,8 +601,14 @@ func (r *AgentRunReconciler) applyScopedStatus(ctx context.Context, log logr.Log
 			current.Status.Phase, current.Status.Result, current.Status.Error = api.AgentRunPhaseSucceeded, observed.Output, ""
 		} else {
 			// Never expose raw native diagnostics. Only mapped public refusal
-			// codes are safe for tenant-visible, actionable explanations.
+			// codes are safe for tenant-visible, actionable explanations. A
+			// failed turn's own text is the tenant's: the owner committed it as
+			// the turn's answer, so it says why (a tool budget, a refused call,
+			// a model error) where the native reason only says "Failed".
 			current.Status.Phase, current.Status.Error = api.AgentRunPhaseFailed, scopedFailureSummary(observed.Phase, observed.Reason)
+			if strings.HasPrefix(observed.Output, "Turn failed") || strings.HasPrefix(observed.Output, "Turn refused") {
+				current.Status.Error += ": " + boundedTurnFailure(observed.Output)
+			}
 		}
 		meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{Type: "CellnScopedExecution", Status: metav1.ConditionTrue, Reason: "TerminalOwnerRecordObserved", Message: "The original prepared owner returned a terminal record; cleanup confirmation is pending", ObservedGeneration: current.Generation})
 	}); err != nil {

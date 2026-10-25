@@ -68,3 +68,17 @@ func TestScopedEndedSummaryExposesOnlyMappedCauses(t *testing.T) {
 		t.Fatalf("raw native diagnostics leaked: %s", got)
 	}
 }
+
+// A failed turn's text names the owner's cause and the harness's own error,
+// never the event stream the worker printed in between.
+func TestBoundedTurnFailureKeepsCauseAndHarnessError(t *testing.T) {
+	text := "Turn failed; no result committed: child refused: guest exited with code 1: CELLN_HARNESS_EVENT {\"type\":\"model\"} CELLN_HARNESS_EVENT {\"type\":\"tool\",\"result\":{\"content\":\"secret-looking page text\"}} CELLN_HARNESS_ERROR tool call budget exhausted"
+	got := boundedTurnFailure(text)
+	want := "Turn failed; no result committed: child refused: guest exited with code 1: tool call budget exhausted"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := boundedTurnFailure("Turn refused; no worker started: " + strings.Repeat("x", 600)); len(got) > 520 || !strings.HasSuffix(got, "…") {
+		t.Fatalf("not bounded: %d", len(got))
+	}
+}

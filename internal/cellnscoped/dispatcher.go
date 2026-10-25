@@ -149,11 +149,27 @@ func CapabilityDecision(decision cellnauthority.PlatformDecision) (cap.Decision,
 // the frozen clock or granting a replacement allowance. Recovery/cleanup must
 // not call this: historical owner authority survives policy withdrawal.
 func (d *Dispatcher) RevalidateAdmission(ctx context.Context, prepared *cellnauthority.StoredPreparation) error {
+	if err := d.PreflightArtifacts(ctx, prepared); err != nil {
+		return err
+	}
+	return d.RevalidateAuthority(ctx, prepared)
+}
+
+// PreflightArtifacts asks the receiver whether its node advertises every
+// contract the decision needs; the first half of RevalidateAdmission.
+func (d *Dispatcher) PreflightArtifacts(ctx context.Context, prepared *cellnauthority.StoredPreparation) error {
 	if d == nil || d.Store.Reader == nil || prepared == nil {
 		return errors.New("scoped admission reader is unavailable")
 	}
-	if err := d.Receiver.PreflightArtifacts(ctx, prepared.Operation.Resolution.Decision); err != nil {
-		return err
+	return d.Receiver.PreflightArtifacts(ctx, prepared.Operation.Resolution.Decision)
+}
+
+// RevalidateAuthority resolves the run again and refuses if the authority
+// the frozen decision was issued under has changed; the second half of
+// RevalidateAdmission.
+func (d *Dispatcher) RevalidateAuthority(ctx context.Context, prepared *cellnauthority.StoredPreparation) error {
+	if d == nil || d.Store.Reader == nil || prepared == nil {
+		return errors.New("scoped admission reader is unavailable")
 	}
 	frozen := prepared.Operation.Resolution
 	frozen.Request = prepared.Operation.ResolveRequest

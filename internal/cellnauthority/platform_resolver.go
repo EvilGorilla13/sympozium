@@ -276,20 +276,33 @@ func (r PlatformResolver) load(ctx context.Context, runKey types.NamespacedName,
 	if len(selection.ToolRefs) != 0 || len(selection.ClusterToolRefs) > 24 {
 		return snapshot, deny(ReasonPolicyContracted, "shared catalogue resolution cannot mix legacy namespaced tools")
 	}
+	// One List serves every selected tool: the resolver reads through the
+	// uncached API reader, and a toolbox selects two dozen tools, so a Get per
+	// tool (taken twice per resolution) was most of a two-second admission.
+	var tools api.ClusterCellnToolList
+	if len(selection.ClusterToolRefs) > 0 {
+		if err := r.Reader.List(ctx, &tools); err != nil {
+			return snapshot, deny(ReasonToolUnknown, "cluster tools unavailable: %v", err)
+		}
+	}
+	byName := make(map[string]*api.ClusterCellnTool, len(tools.Items))
+	for i := range tools.Items {
+		byName[tools.Items[i].Name] = &tools.Items[i]
+	}
 	seen := map[string]bool{}
 	for _, ref := range selection.ClusterToolRefs {
 		if ref.Name == "" || ref.Revision == "" || seen[ref.Name] {
 			return snapshot, deny(ReasonToolOrder, "cluster tool refs require unique names and exact revisions")
 		}
 		seen[ref.Name] = true
-		var tool api.ClusterCellnTool
-		if err := r.Reader.Get(ctx, types.NamespacedName{Name: ref.Name}, &tool); err != nil {
-			return snapshot, deny(ReasonToolUnknown, "cluster tool %q unavailable: %v", ref.Name, err)
+		tool, ok := byName[ref.Name]
+		if !ok {
+			return snapshot, deny(ReasonToolUnknown, "cluster tool %q unavailable: not found", ref.Name)
 		}
 		if !liveMeta(tool.ObjectMeta, true) || tool.Namespace != "" || tool.Spec.Revision != ref.Revision {
 			return snapshot, deny(ReasonToolUnknown, "cluster tool %q revision changed", ref.Name)
 		}
-		snapshot.Tools = append(snapshot.Tools, tool)
+		snapshot.Tools = append(snapshot.Tools, *tool)
 	}
 
 	var policies api.CellnExecutionPolicyList
