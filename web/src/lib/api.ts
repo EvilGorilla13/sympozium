@@ -214,6 +214,11 @@ export interface CellnMediatedRoute {
   policy?: string;
   /** The fixed key name the provider Secret must hold for this protocol; "" when keyless. */
   secretKey: string;
+  /**
+   * Client-side only: a provider chosen under open model access. Its models
+   * and endpoint origin are the user's, not a declared list.
+   */
+  open?: boolean;
 }
 
 /**
@@ -525,6 +530,8 @@ export interface AgentRunStatus {
   harnessRuntimeSource?: "agent-default" | "run";
   postRunJobName?: string;
   gateVerdict?: string;
+  attempt?: number;
+  retryOf?: string;
   delegates?: DelegateStatus[];
   conditions?: Condition[];
 }
