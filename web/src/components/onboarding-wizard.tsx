@@ -1638,6 +1638,10 @@ export function OnboardingWizard({
 
         {/* ── Model step ────────────────────────────────────────────── */}
         {step === "model" && celln && cellnRoute && (
+          // Bounded like the other steps: with the advanced parameters open and
+          // the persona below, this step outgrows the dialog and would push the
+          // footer out of view.
+          <div className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
           <CellnModelStep
             route={cellnRoute}
             model={form.model}
@@ -1650,8 +1654,6 @@ export function OnboardingWizard({
             maxOutputTokens={cellnMaxOutputTokens}
             onMaxOutputTokens={setCellnMaxOutputTokens}
           />
-        )}
-        {step === "model" && celln && cellnRoute && (
           <div className="space-y-1" data-testid="celln-persona">
             <Label className="text-xs">Persona (optional)</Label>
             <Textarea
@@ -1664,6 +1666,7 @@ export function OnboardingWizard({
               The system prompt every run of this Agent carries into its cell; leave empty for the fleet's default. {systemPromptBytes(form.systemPrompt || "")}/{MAX_CELLN_SYSTEM_PROMPT_BYTES} bytes.
             </p>
             {systemPromptBytes(form.systemPrompt || "") > MAX_CELLN_SYSTEM_PROMPT_BYTES && <p role="alert" className="text-xs text-red-400">A cell accepts at most {MAX_CELLN_SYSTEM_PROMPT_BYTES} bytes.</p>}
+          </div>
           </div>
         )}
         {step === "model" && !celln && (
