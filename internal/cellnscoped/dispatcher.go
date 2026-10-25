@@ -34,17 +34,18 @@ func (d *Dispatcher) Prepare(ctx context.Context, key types.NamespacedName) (*ce
 	if err := d.Store.Reader.Get(ctx, key, &run); err != nil {
 		return nil, err
 	}
-	if run.Spec.ExecutionLifecycle == "enduring" {
-		var namespace corev1.Namespace
-		if err := d.Store.Reader.Get(ctx, types.NamespacedName{Name: key.Namespace}, &namespace); err != nil {
-			return nil, err
-		}
-		incarnation, err := cellnauthority.ScopedParentIncarnation(d.ClusterID, string(namespace.UID), string(run.UID))
-		if err != nil {
-			return nil, err
-		}
-		request.ParentIncarnation = incarnation
+	// Every scoped run gets its parent incarnation: an enduring run is a
+	// parent, and the resolver issues a one-shot with a model on a fleet
+	// profile as a single-turn parent too. A plain one-shot ignores it.
+	var namespace corev1.Namespace
+	if err := d.Store.Reader.Get(ctx, types.NamespacedName{Name: key.Namespace}, &namespace); err != nil {
+		return nil, err
 	}
+	incarnation, err := cellnauthority.ScopedParentIncarnation(d.ClusterID, string(namespace.UID), string(run.UID))
+	if err != nil {
+		return nil, err
+	}
+	request.ParentIncarnation = incarnation
 	return d.Store.Prepare(ctx, key, request)
 }
 

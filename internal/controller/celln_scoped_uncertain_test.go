@@ -35,6 +35,31 @@ func TestScopedUncertainEndsTheRunAfterGrace(t *testing.T) {
 	}
 }
 
+// An enduring conversation that answered and whose parent deadline has passed
+// ended by reaching its lease; anything else that loses its parent did not.
+func TestScopedLeaseElapsedOnlyForAnsweredEnduringRunsPastTheirDeadline(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	run := func(lifecycle, result string) *api.AgentRun {
+		return &api.AgentRun{Spec: api.AgentRunSpec{ExecutionLifecycle: lifecycle}, Status: api.AgentRunStatus{Result: result}}
+	}
+	for name, tc := range map[string]struct {
+		run      *api.AgentRun
+		deadline int64
+		elapsed  bool
+	}{
+		"answered, past the deadline":   {run("enduring", "pong"), now.Unix() - 60, true},
+		"answered, at the deadline":     {run("enduring", "pong"), now.Unix(), true},
+		"answered, before the deadline": {run("enduring", "pong"), now.Unix() + 60, false},
+		"never answered":                {run("enduring", ""), now.Unix() - 60, false},
+		"one-shot":                      {run("one-shot", "pong"), now.Unix() - 60, false},
+		"no deadline recorded":          {run("enduring", "pong"), 0, false},
+	} {
+		if got := scopedLeaseElapsed(tc.run, tc.deadline, now); got != tc.elapsed {
+			t.Errorf("%s: elapsed=%v, want %v", name, got, tc.elapsed)
+		}
+	}
+}
+
 func TestScopedEndedSummaryExposesOnlyMappedCauses(t *testing.T) {
 	if got := scopedEndedSummary("turn handler failed; parent context lost: aggregate parent budget exhausted"); !strings.Contains(got, "AUTH_BUDGET_EXHAUSTED") || strings.Contains(got, "turn handler") {
 		t.Fatalf("budget: %s", got)
