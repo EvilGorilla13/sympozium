@@ -35,7 +35,7 @@ Components:
   replaces with that release's version (hack/stamp-release-version.sh). Until
   then the chart is an unreleased build, and every upgrade shows the note.
 */}}
-{{- $memoryVersioningSince := "__NEXT_RELEASE_VERSION__" }}
+{{- $memoryVersioningSince := "0.12.1" }}
 {{- $semver := "^[0-9]+\\.[0-9]+\\.[0-9]+$" }}
 {{- $prevVersion := "" }}
 {{- if .Release.IsUpgrade }}
