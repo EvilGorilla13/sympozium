@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.1](https://github.com/sympozium-ai/sympozium/compare/v0.12.0...v0.12.1) (2026-10-28)
+
+
+### Features
+
+* make thinking work and add maxTokens/temperature model tuning ([#637](https://github.com/sympozium-ai/sympozium/issues/637)) ([a83e772](https://github.com/sympozium-ai/sympozium/commit/a83e77207d03efe2c0359e4c199f57bfc21ec85d))
+* **memory:** let agents update and forget entries ([#310](https://github.com/sympozium-ai/sympozium/issues/310)) ([#639](https://github.com/sympozium-ai/sympozium/issues/639)) ([22f03e0](https://github.com/sympozium-ai/sympozium/commit/22f03e074a1fd49fe105d43f10b2cebfc0df5613))
+* resume gate ([#339](https://github.com/sympozium-ai/sympozium/issues/339)) ([4439e6a](https://github.com/sympozium-ai/sympozium/commit/4439e6a420deb8ee15bc0981ab3fd3c2e7ee2c68))
+
+
+### Bug Fixes
+
+* **controller:** preserve namespace for agent-requested schedules ([#672](https://github.com/sympozium-ai/sympozium/issues/672)) ([e07e04e](https://github.com/sympozium-ai/sympozium/commit/e07e04e60ad7e0ca19ffa731f22b98c0fcdf4826))
+
 ## [0.12.0](https://github.com/sympozium-ai/sympozium/compare/v0.11.6...v0.12.0) (2026-10-25)
 
 
