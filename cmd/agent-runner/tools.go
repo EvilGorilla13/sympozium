@@ -394,7 +394,6 @@ func defaultTools() []ToolDef {
 	return tools
 }
 
-
 // delegationTargets parses ENSEMBLE_RELATIONSHIPS and returns the persona names
 // reachable via delegation or sequential edges. Returns nil when no outgoing
 // delegation edges are defined — callers use len(targets) > 0 to gate registration.
@@ -411,8 +410,12 @@ func delegationTargets() []string {
 		return nil
 	}
 	var targets []string
+	seen := map[string]bool{}
 	for _, r := range rels {
-		if r.Type == "delegation" || r.Type == "sequential" {
+		// A persona named by both a delegation and a sequential edge is one
+		// target, listed once in the tool's enum.
+		if (r.Type == "delegation" || r.Type == "sequential") && r.Target != "" && !seen[r.Target] {
+			seen[r.Target] = true
 			targets = append(targets, r.Target)
 		}
 	}

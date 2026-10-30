@@ -1271,3 +1271,26 @@ func TestReadSkipMarker(t *testing.T) {
 		}
 	})
 }
+
+func TestDelegationTargets_DedupesAcrossEdgeKinds(t *testing.T) {
+	t.Setenv("ENSEMBLE_RELATIONSHIPS", `[{"target":"reviewer","type":"delegation"},{"target":"reviewer","type":"sequential"},{"target":"writer","type":"sequential"},{"target":"boss","type":"supervision"}]`)
+	got := delegationTargets()
+	want := []string{"reviewer", "writer"}
+	if len(got) != len(want) {
+		t.Fatalf("targets = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("targets = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestBuildRelationshipContext_SequentialEdgesNameTheTool(t *testing.T) {
+	got := buildRelationshipContext(`[{"target":"reviewer","type":"sequential","condition":"after the draft"}]`)
+	for _, want := range []string{"## Team Relationships", "hand it on", "delegate_to_persona", "**reviewer**", "after the draft"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("relationship context lacks %q:\n%s", want, got)
+		}
+	}
+}
